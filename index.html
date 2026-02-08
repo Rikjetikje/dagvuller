@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dagvuller v4</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * { -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+        @keyframes shimmer {
+          0% { background-position: -200% 0; }
+          100% { background-position: 200% 0; }
+        }
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .ai-shimmer {
+          background: linear-gradient(90deg, transparent 0%, rgba(168,85,247,0.08) 50%, transparent 100%);
+          background-size: 200% 100%;
+          animation: shimmer 2s ease-in-out;
+        }
+        .ai-fade-in {
+          animation: fadeInUp 0.4s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+
+// --- Constants ---
+
+const MAX_ARCHIVE_SIZE = 50;
+const MAX_UNDO_STEPS = 10;
+const PLAN_DATA_MAX_AGE_DAYS = 90;
+
+const SLOT_CATEGORIES = {
+  ochtend: ["studie", "mindfulness", "gezond_eten", "creatief"],
+  middag: ["studie", "sport", "creatief", "werk"],
+  namiddag: ["sport", "huishouden", "praktisch", "sociaal"],
+  avond: ["sociaal", "entertainment", "mindfulness", "creatief"],
+};
+
+const BASE_IDEAS = [
+  { t: "3 opleidingen/studies online bekijken en vergelijken", cat: "studie" },
+  { t: "Zoeken naar open dagen of meeloopdag en er een aanvragen", cat: "studie" },
+  { t: "Een beroepentest doen en uitkomsten voor jezelf opschrijven", cat: "studie" },
+  { t: "Voor jezelf opschrijven: wat vind ik leuk om te doen?", cat: "studie" },
+  { t: "Met iemand praten over studie of werk (ouder/vriend/begeleider)", cat: "studie" },
+  { t: "Op YouTube video's kijken over verschillende beroepen", cat: "studie" },
+  { t: "Bezoek een hogeschool of universiteit website en rondkijken", cat: "studie" },
+  { t: "Skaten in de buurt of bij het skatepark", cat: "sport" },
+  { t: "Sporten in de sportschool", cat: "sport" },
+  { t: "Hardlopen met muziek", cat: "sport" },
+  { t: "Wandelen terwijl je een podcast luistert", cat: "sport" },
+  { t: "Fietsen naar een plek waar je nog nooit bent geweest", cat: "sport" },
+  { t: "Thuis een workout doen (YouTube video)", cat: "sport" },
+  { t: "Voetballen of basketballen op een veldje", cat: "sport" },
+  { t: "Vrienden appen om later te chillen of te skaten", cat: "sociaal" },
+  { t: "Met een vriend afspreken voor koffie of frisdrank", cat: "sociaal" },
+  { t: "Met het gezin een spel spelen", cat: "sociaal" },
+  { t: "Met je vader of moeder iets leuks doen", cat: "sociaal" },
+  { t: "Samen met iemand koken en eten", cat: "sociaal" },
+  { t: "Online gamen met vrienden", cat: "sociaal" },
+  { t: "Bellen met iemand die je al een tijdje niet hebt gesproken", cat: "sociaal" },
+  { t: "Je kamer opruimen en schoonmaken", cat: "huishouden" },
+  { t: "De was doen (sorteren, wassen, ophangen)", cat: "huishouden" },
+  { t: "Stofzuigen in huis", cat: "huishouden" },
+  { t: "Boodschappen doen voor thuis", cat: "praktisch" },
+  { t: "Je bureau/werkplek opruimen en organiseren", cat: "huishouden" },
+  { t: "Kleding uitzoeken die je niet meer draagt en weggeven", cat: "praktisch" },
+  { t: "Iets gezonds koken voor jezelf", cat: "gezond_eten" },
+  { t: "Ontbijt, lunch of avondeten voorbereiden voor morgen", cat: "gezond_eten" },
+  { t: "Een nieuwe gezonde maaltijd uitproberen (recept opzoeken)", cat: "gezond_eten" },
+  { t: "Fruit snijden voor de komende dagen", cat: "gezond_eten" },
+  { t: "Iets maken: tekening, muziek, video edit of design", cat: "creatief" },
+  { t: "Een tutorial volgen om iets nieuws te leren", cat: "creatief" },
+  { t: "Werken aan een project waar je mee bezig bent", cat: "creatief" },
+  { t: "Je portfolio bijwerken met dingen waar je trots op bent", cat: "creatief" },
+  { t: "Een instrument beoefenen", cat: "creatief" },
+  { t: "Foto's maken in de buurt", cat: "creatief" },
+  { t: "Voor jezelf opschrijven waar je mee zit of over nadenkt", cat: "mindfulness" },
+  { t: "Een boek lezen dat je interessant vindt", cat: "mindfulness" },
+  { t: "Muziek luisteren en even niks anders doen", cat: "mindfulness" },
+  { t: "Buiten zitten en tot rust komen", cat: "mindfulness" },
+  { t: "Een podcast of TED talk luisteren over een interessant onderwerp", cat: "mindfulness" },
+  { t: "Zoeken naar vacatures voor een bijbaan", cat: "werk" },
+  { t: "Je CV maken of bijwerken", cat: "werk" },
+  { t: "Reageren op een vacature of bedrijf benaderen", cat: "werk" },
+  { t: "Informatie zoeken over hoe je geld kunt verdienen", cat: "werk" },
+  { t: "Een film of serie kijken die je al lang wilde zien", cat: "entertainment" },
+  { t: "YouTube video's kijken over een onderwerp dat je interesseert", cat: "entertainment" },
+  { t: "Een game spelen waar je zin in hebt", cat: "entertainment" },
+  { t: "Ontdekken van nieuwe muziek of artiesten", cat: "entertainment" },
+];
+
+const SLOTS = [
+  { key: "ochtend", label: "Ochtend", emoji: "🌅", hint: "rustig starten / focus" },
+  { key: "middag", label: "Middag", emoji: "☀️", hint: "grootste blok energie" },
+  { key: "namiddag", label: "Namiddag", emoji: "🌤️", hint: "beweging / praktisch" },
+  { key: "avond", label: "Avond", emoji: "🌙", hint: "sociaal / ontspannen" },
+];
+
+const WEEKDAY_NAMES = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+
+// --- Utility functions ---
+
+let nextTodoId = Date.now();
+function generateId() { return nextTodoId++; }
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function pickSuggestions(ideas, slotKey, count = 3) {
+  const preferredCats = SLOT_CATEGORIES[slotKey] || [];
+  const preferred = ideas.filter(idea => preferredCats.includes(idea.cat));
+  const rest = ideas.filter(idea => !preferredCats.includes(idea.cat));
+  return [...shuffle(preferred), ...shuffle(rest)].slice(0, count);
+}
+
+function formatDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+}
+
+function formatDateDutch(dateStr) {
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString('nl-NL', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+function isSameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function getWeekDays(date) {
+  const d = new Date(date);
+  const dow = d.getDay();
+  const mon = new Date(d);
+  mon.setDate(d.getDate() - (dow === 0 ? 6 : dow - 1));
+  return Array.from({length: 7}, (_, i) => { const day = new Date(mon); day.setDate(mon.getDate() + i); return day; });
+}
+
+function formatWeekHeader(weekDays) {
+  const [first, last] = [weekDays[0], weekDays[6]];
+  if (first.getMonth() === last.getMonth()) {
+    return `${first.getDate()} - ${last.getDate()} ${first.toLocaleDateString('nl-NL', { month: 'long', year: 'numeric' })}`;
+  }
+  if (first.getFullYear() === last.getFullYear()) {
+    return `${first.getDate()} ${first.toLocaleDateString('nl-NL', { month: 'short' })} - ${last.getDate()} ${last.toLocaleDateString('nl-NL', { month: 'short', year: 'numeric' })}`;
+  }
+  return `${first.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' })} - ${last.toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+}
+
+// --- Safe localStorage ---
+
+function safeGetJSON(key, fallback) {
+  try { const s = localStorage.getItem(key); if (s) return JSON.parse(s); } catch (e) { console.warn(`localStorage "${key}":`, e); }
+  return fallback;
+}
+
+function safeSetJSON(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { console.warn(`localStorage "${key}":`, e); }
+}
+
+function cleanupOldPlanData() {
+  try {
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - PLAN_DATA_MAX_AGE_DAYS);
+    const cutoffStr = formatDate(cutoff);
+    const remove = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith('dagvuller_plan_') && key.replace('dagvuller_plan_', '') < cutoffStr) remove.push(key);
+    }
+    remove.forEach(k => localStorage.removeItem(k));
+  } catch (e) {}
+}
+
+// --- Data loaders ---
+
+function getEmptyPlan() { return SLOTS.map(s => ({ key: s.key, activity: null, aiGenerated: false })); }
+
+function loadPlanForDate(date) {
+  const plan = safeGetJSON(`dagvuller_plan_${formatDate(date)}`, getEmptyPlan());
+  return plan.map(p => ({ ...p, aiGenerated: p.aiGenerated || false }));
+}
+
+function savePlanForDate(date, plan) { safeSetJSON(`dagvuller_plan_${formatDate(date)}`, plan); }
+
+const DEFAULT_TODOS = [
+  { id: generateId(), text: "Zet je wekker", done: false },
+  { id: generateId(), text: "Leg kleding klaar", done: false },
+];
+
+function loadTodos() {
+  const saved = safeGetJSON('dagvuller_todos_global', null);
+  if (!saved) return DEFAULT_TODOS;
+  return saved.map(t => t.id ? t : { ...t, id: generateId() });
+}
+
+function loadTodoArchive() { return safeGetJSON('dagvuller_todo_history', []); }
+
+// --- Saved AI activities (persisted to suggestions) ---
+
+const MAX_SAVED_AI_IDEAS = 30;
+
+function loadSavedAIIdeas() { return safeGetJSON('dagvuller_ai_ideas', []); }
+
+function saveAIIdea(text, slotKey) {
+  const ideas = loadSavedAIIdeas();
+  // Voorkom duplicaten (case-insensitive)
+  if (ideas.some(i => i.t.toLowerCase() === text.toLowerCase())) return;
+  const updated = [...ideas, { t: text, slot: slotKey, ai: true }].slice(-MAX_SAVED_AI_IDEAS);
+  safeSetJSON('dagvuller_ai_ideas', updated);
+}
+
+// --- AI Activity Generator ---
+
+const AI_SYSTEM_PROMPT = `Je bent een creatieve dagplanner voor een jongere (16-22) in Nederland.
+Je bedenkt VERRASSENDE, onverwachte maar haalbare activiteiten.
+Denk aan: onbekende plekken ontdekken, mini-experimenten, uitdagingen, iets maken, iemand verrassen, iets nieuws leren op een ongewone manier.
+VERMIJD standaard suggesties zoals "wandelen", "een boek lezen", "opruimen", "sporten" of "huiswerk maken".
+Wees specifiek en concreet: noem een plek, techniek, thema of actie die je normaal niet snel bedenkt.
+Antwoord ALLEEN met de activiteit zelf, in 1 korte zin (max 12 woorden).
+Geen uitleg, geen opsomming, geen aanhalingstekens.`;
+
+async function generateAIActivity(slotKey, slotLabel, currentActivities) {
+  const apiKey = localStorage.getItem('dagvuller_anthropic_key');
+  if (!apiKey) throw new Error('NO_KEY');
+
+  const slotContext = {
+    ochtend: "De ochtend is bedoeld voor rustig starten, focus en reflectie.",
+    middag: "De middag is het grootste energieblok, goed voor productieve of sportieve dingen.",
+    namiddag: "De namiddag is goed voor beweging, praktische taken of sociale activiteiten.",
+    avond: "De avond is voor ontspanning, sociaal contact of entertainment.",
+  };
+
+  const plannedText = currentActivities.length > 0
+    ? `Al gepland vandaag: ${currentActivities.join(', ')}. Bedenk iets heel anders.` : '';
+
+  // Stuur een paar standaard suggesties mee zodat AI die vermijdt
+  const sampleBase = shuffle(BASE_IDEAS.filter(i => (SLOT_CATEGORIES[slotKey] || []).includes(i.cat))).slice(0, 5).map(i => i.t);
+  const avoidText = `Vermijd dit soort standaard suggesties: ${sampleBase.join('; ')}.`;
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 100,
+      system: AI_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: `Bedenk iets voor de ${slotLabel.toLowerCase()}. ${slotContext[slotKey] || ''}\n${plannedText}\n${avoidText}\nVerras me!` }],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    if (response.status === 401) throw new Error('INVALID_KEY');
+    throw new Error(err.error?.message || `API fout (${response.status})`);
+  }
+
+  const data = await response.json();
+  const text = data.content?.[0]?.text?.trim();
+  if (!text) throw new Error('Geen antwoord ontvangen van AI');
+  return text;
+}
+
+// --- API Key Settings ---
+
+function ApiKeySettings({ onClose }) {
+  const [key, setKey] = useState(() => localStorage.getItem('dagvuller_anthropic_key') || '');
+  const [saved, setSaved] = useState(false);
+
+  function handleSave() {
+    if (key.trim()) localStorage.setItem('dagvuller_anthropic_key', key.trim());
+    else localStorage.removeItem('dagvuller_anthropic_key');
+    setSaved(true);
+    setTimeout(() => { setSaved(false); if (onClose) onClose(); }, 1000);
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="font-bold mb-1">AI Instellingen</h3>
+        <p className="text-xs text-slate-500">Voeg je Anthropic API key toe voor de "Tover activiteit" functie. Je key wordt alleen lokaal opgeslagen.</p>
+      </div>
+      <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-ant-..."
+        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm font-mono" aria-label="Anthropic API key"
+        onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }} />
+      <div className="flex gap-2">
+        <button onClick={handleSave}
+          className={`flex-1 px-4 py-2 rounded-lg font-semibold min-h-[44px] text-sm ${saved ? 'bg-green-600 text-white' : 'bg-slate-900 text-white'}`}>
+          {saved ? '✓ Opgeslagen!' : 'Opslaan'}
+        </button>
+        {key && <button onClick={() => { localStorage.removeItem('dagvuller_anthropic_key'); setKey(''); }}
+          className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-lg font-semibold min-h-[44px] text-sm">Wissen</button>}
+        {onClose && <button onClick={onClose} className="px-4 py-2 bg-slate-100 rounded-lg font-semibold min-h-[44px] text-sm">Sluiten</button>}
+      </div>
+    </div>
+  );
+}
+
+// --- Modal ---
+
+function Modal({ children, onClose, label }) {
+  const overlayRef = useRef(null);
+  const contentRef = useRef(null);
+
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'Tab' && contentRef.current) {
+        const els = contentRef.current.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])');
+        if (els.length === 0) return;
+        const [first, last] = [els[0], els[els.length - 1]];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    contentRef.current?.querySelector('button, input, select, textarea')?.focus();
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div ref={overlayRef} role="dialog" aria-modal="true" aria-label={label}
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}>
+      <div ref={contentRef} className="bg-white rounded-xl p-4 max-w-md w-full max-h-[80vh] overflow-hidden flex flex-col">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// --- WeekCalendar ---
+
+function WeekCalendar({ currentDate, setCurrentDate, weekDays, weekFillData }) {
+  const today = useMemo(() => new Date(), []);
+
+  function changeWeek(dir) {
+    const d = new Date(currentDate);
+    d.setDate(d.getDate() + dir * 7);
+    setCurrentDate(d);
+  }
+
+  const isCurrentWeek = weekDays.some(d => isSameDay(d, today));
+
+  return (
+    <nav className="bg-white rounded-xl shadow-sm border border-slate-200 p-2.5 mb-3" aria-label="Weekkalender">
+      <div className="flex items-center justify-between mb-1.5">
+        <button onClick={() => changeWeek(-1)} className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 text-slate-600 active:bg-slate-50 text-sm" aria-label="Vorige week">←</button>
+        <div className="text-xs font-semibold text-slate-700">{formatWeekHeader(weekDays)}</div>
+        <button onClick={() => changeWeek(1)} className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 text-slate-600 active:bg-slate-50 text-sm" aria-label="Volgende week">→</button>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1">
+        {weekDays.map((day, i) => {
+          const isToday = isSameDay(day, today);
+          const isSelected = isSameDay(day, currentDate);
+          const filled = weekFillData[i];
+          return (
+            <button key={formatDate(day)} onClick={() => setCurrentDate(day)}
+              className={`py-1.5 rounded-lg text-center ${isSelected ? 'bg-slate-900 text-white' : isToday ? 'bg-blue-50 border border-blue-200' : 'bg-slate-50 border border-slate-100'}`}
+              aria-label={`${WEEKDAY_NAMES[day.getDay()]} ${day.getDate()}, ${filled}/4 ingevuld${isToday ? ' (vandaag)' : ''}`}
+              aria-current={isSelected ? 'date' : undefined}>
+              <div className="text-[10px] font-semibold leading-none mb-0.5">{WEEKDAY_NAMES[day.getDay()]}</div>
+              <div className={`text-base font-bold leading-none ${isSelected ? 'text-white' : ''}`}>{day.getDate()}</div>
+              <div className="text-[10px] leading-none mt-0.5 opacity-60">{filled}/4</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {!isCurrentWeek && (
+        <button onClick={() => setCurrentDate(new Date())}
+          className="w-full mt-1.5 px-3 py-1.5 bg-blue-50 border border-blue-200 rounded-lg text-xs font-semibold text-blue-700 active:bg-blue-100">
+          Ga naar vandaag
+        </button>
+      )}
+    </nav>
+  );
+}
+
+// --- TodoList ---
+
+function TodoList({ todos, setTodos, todoArchive, setTodoArchive }) {
+  const [editingTodo, setEditingTodo] = useState(null);
+  const [editTodoText, setEditTodoText] = useState("");
+  const [newTodo, setNewTodo] = useState("");
+  const [undoStack, setUndoStack] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
+
+  function addToUndo(old) { setUndoStack(prev => [...prev.slice(-(MAX_UNDO_STEPS-1)), old]); }
+  function toggleTodo(id) { addToUndo([...todos]); setTodos(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t)); }
+  function addTodo() { if (newTodo.trim()) { addToUndo([...todos]); setTodos(prev => [...prev, { id: generateId(), text: newTodo.trim(), done: false }]); setNewTodo(""); } }
+
+  function deleteTodo(id) {
+    const found = todos.find(item => item.id === id); if (!found) return;
+    addToUndo([...todos]);
+    setTodoArchive(prev => [...prev, { text: found.text, deletedAt: new Date().toISOString() }].slice(-MAX_ARCHIVE_SIZE));
+    setTodos(prev => prev.filter(item => item.id !== id));
+  }
+
+  function clearCompleted() {
+    const done = todos.filter(t => t.done); if (!done.length) return;
+    addToUndo([...todos]);
+    const now = new Date().toISOString();
+    setTodoArchive(prev => [...prev, ...done.map(t => ({ text: t.text, deletedAt: now }))].slice(-MAX_ARCHIVE_SIZE));
+    setTodos(prev => prev.filter(t => !t.done));
+  }
+
+  function moveTodo(i, dir) {
+    const ni = i + dir; if (ni < 0 || ni >= todos.length) return;
+    addToUndo([...todos]);
+    setTodos(prev => { const n = [...prev]; [n[i], n[ni]] = [n[ni], n[i]]; return n; });
+  }
+
+  function startEditTodo(id) { const found = todos.find(item => item.id === id); if (found) { setEditingTodo(id); setEditTodoText(found.text); } }
+  function saveEditTodo() { if (editTodoText.trim() && editingTodo !== null) { addToUndo([...todos]); setTodos(prev => prev.map(item => item.id === editingTodo ? { ...item, text: editTodoText.trim() } : item)); } setEditingTodo(null); setEditTodoText(""); }
+  function cancelEditTodo() { setEditingTodo(null); setEditTodoText(""); }
+  function undoTodo() { if (undoStack.length > 0) { setTodos(undoStack[undoStack.length - 1]); setUndoStack(prev => prev.slice(0, -1)); } }
+  function restoreTodo(idx) { setTodos(prev => [...prev, { id: generateId(), text: todoArchive[idx].text, done: false }]); setTodoArchive(prev => prev.filter((_, i) => i !== idx)); }
+
+  const completedCount = todos.filter(t => t.done).length;
+
+  return (
+    <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-2.5 mb-3" aria-label="To-do lijst">
+      <div className="flex items-center justify-between mb-1.5">
+        <h2 className="font-bold text-sm">To-do's</h2>
+        <div className="flex gap-1">
+          {completedCount > 0 && <button onClick={clearCompleted} className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg text-[11px]" aria-label={`Wis ${completedCount} voltooide`} title="Wis voltooide">✔</button>}
+          {undoStack.length > 0 && <button onClick={undoTodo} className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg text-sm" aria-label="Ongedaan maken" title="Ongedaan maken">↶</button>}
+          <button onClick={() => setShowHistory(true)} className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg text-[11px]" aria-label="Geschiedenis" title="Geschiedenis">📜</button>
+        </div>
+      </div>
+
+      <div className="space-y-1 mb-2">
+        {todos.map((todo, i) => {
+          const isEditing = editingTodo === todo.id;
+          return (
+            <div key={todo.id} className="flex items-center gap-1.5 px-2 py-1.5 bg-slate-50 rounded-lg border border-slate-100">
+              {!isEditing ? (
+                <>
+                  <input type="checkbox" checked={todo.done} onChange={() => toggleTodo(todo.id)} className="w-4 h-4 shrink-0 cursor-pointer" />
+                  <button onClick={() => startEditTodo(todo.id)}
+                    className={`flex-1 min-w-0 text-left text-sm cursor-pointer hover:text-slate-600 transition-colors ${todo.done ? "line-through text-slate-400" : ""}`}
+                    aria-label={`Bewerk: ${todo.text}`}>
+                    {todo.text}
+                  </button>
+                  <div className="flex gap-0.5 shrink-0">
+                    <button onClick={() => moveTodo(i, -1)} disabled={i === 0} className={`w-7 h-7 flex items-center justify-center rounded text-[11px] ${i === 0 ? "text-slate-300" : "text-slate-500 active:bg-slate-200"}`} aria-label="Omhoog">↑</button>
+                    <button onClick={() => moveTodo(i, 1)} disabled={i === todos.length-1} className={`w-7 h-7 flex items-center justify-center rounded text-[11px] ${i === todos.length-1 ? "text-slate-300" : "text-slate-500 active:bg-slate-200"}`} aria-label="Omlaag">↓</button>
+                    <button onClick={() => deleteTodo(todo.id)} className="w-7 h-7 flex items-center justify-center rounded text-[11px] text-red-500 active:bg-slate-200" aria-label="Verwijder">🗑️</button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <input type="text" value={editTodoText} onChange={(e) => setEditTodoText(e.target.value)}
+                    className="flex-1 px-2 py-1 border border-slate-300 rounded-lg text-sm" autoFocus
+                    onKeyDown={(e) => { if (e.key === "Enter") saveEditTodo(); if (e.key === "Escape") cancelEditTodo(); }} />
+                  <button onClick={saveEditTodo} className="w-7 h-7 flex items-center justify-center bg-slate-900 text-white rounded-lg text-xs" aria-label="Opslaan">✓</button>
+                  <button onClick={cancelEditTodo} className="w-7 h-7 flex items-center justify-center bg-slate-100 rounded-lg text-xs" aria-label="Annuleren">✕</button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex gap-1.5">
+        <input type="text" value={newTodo} onChange={(e) => setNewTodo(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && addTodo()} placeholder="Nieuwe to-do..."
+          className="flex-1 px-2.5 py-1.5 border border-slate-200 rounded-lg text-sm" aria-label="Nieuwe to-do" />
+        <button onClick={addTodo} className="w-9 h-9 flex items-center justify-center bg-slate-900 text-white rounded-lg font-semibold text-sm" aria-label="Voeg toe">+</button>
+      </div>
+
+      {showHistory && (
+        <Modal onClose={() => setShowHistory(false)} label="To-do geschiedenis">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold">Geschiedenis</h3>
+            {todoArchive.length > 0 && <button onClick={() => { if (window.confirm('Hele geschiedenis wissen?')) setTodoArchive([]); }} className="text-xs text-red-600 underline">Wis alles</button>}
+          </div>
+          <div className="flex-1 overflow-auto">
+            {todoArchive.length === 0 ? <div className="text-center text-slate-400 py-8 text-sm">Geen verwijderde to-do's</div> : (
+              <div className="space-y-1.5">
+                {[...todoArchive].reverse().map((todo, i) => {
+                  const idx = todoArchive.length - 1 - i;
+                  return (
+                    <div key={idx} className="flex items-center gap-2 p-2 bg-slate-50 rounded-lg border border-slate-100">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm">{todo.text}</div>
+                        <div className="text-[10px] text-slate-400">{new Date(todo.deletedAt).toLocaleDateString('nl-NL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+                      </div>
+                      <button onClick={() => restoreTodo(idx)} className="px-2.5 py-1 bg-slate-900 text-white rounded-lg text-xs font-semibold shrink-0">Herstel</button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          <button onClick={() => setShowHistory(false)} className="mt-3 w-full px-4 py-2 bg-slate-100 rounded-lg font-semibold text-sm">Sluiten</button>
+        </Modal>
+      )}
+    </section>
+  );
+}
+
+// --- SlotCard ---
+
+function SlotCard({ slot, slotInfo, index, totalSlots, onUpdatePlan, allSlotActivities }) {
+  const [isActive, setIsActive] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState(null);
+  const [showKeySetup, setShowKeySetup] = useState(false);
+  const [justGenerated, setJustGenerated] = useState(false);
+  const [showAIHistory, setShowAIHistory] = useState(false);
+
+  const hasActivity = !!slot.activity;
+
+  function openSuggestions() { setIsActive(true); setSuggestions(pickSuggestions(BASE_IDEAS, slot.key, 3)); setIsEditing(false); }
+  function chooseSuggestion(idea) { onUpdatePlan(slot.key, idea.t, false); setIsActive(false); setSuggestions([]); }
+  function refreshSuggestions() { setSuggestions(pickSuggestions(BASE_IDEAS, slot.key, 3)); }
+  function startEdit() { setIsEditing(true); setEditText(slot.activity || ""); setIsActive(false); }
+  function saveEdit() { if (editText.trim()) onUpdatePlan(slot.key, editText.trim(), false); setIsEditing(false); setEditText(""); }
+  function cancelEdit() { setIsEditing(false); setEditText(""); }
+  function clearActivity() { onUpdatePlan(slot.key, null, false); }
+  function moveSlot(dir) { onUpdatePlan('__move__', { index, direction: dir }); }
+
+  async function generateMagicActivity() {
+    setAiError(null); setAiLoading(true);
+    try {
+      const activity = await generateAIActivity(slot.key, slotInfo.label, allSlotActivities);
+      onUpdatePlan(slot.key, activity, true);
+      saveAIIdea(activity, slot.key);
+      setJustGenerated(true);
+      setTimeout(() => setJustGenerated(false), 2500);
+      setIsActive(false);
+    } catch (err) {
+      if (err.message === 'NO_KEY') setShowKeySetup(true);
+      else if (err.message === 'INVALID_KEY') setAiError('API key ongeldig. Check instellingen.');
+      else setAiError(err.message || 'Er ging iets mis');
+    } finally { setAiLoading(false); }
+  }
+
+  return (
+    <div className={`bg-white rounded-xl shadow-sm border ${justGenerated ? 'border-purple-300' : 'border-slate-200'} transition-colors duration-500`}>
+      <div className="p-2.5">
+        {/* Header row: emoji + label + action buttons */}
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-lg" role="img" aria-hidden="true">{slotInfo.emoji}</span>
+          <div className="flex-1 min-w-0">
+            <div className="font-bold text-sm leading-tight">{slotInfo.label}</div>
+            <div className="text-[10px] text-slate-500 leading-tight">{slotInfo.hint}</div>
+          </div>
+
+          {hasActivity && !isEditing && !isActive && (
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button onClick={() => moveSlot(-1)} disabled={index === 0} className={`w-7 h-7 flex items-center justify-center rounded-lg text-[11px] ${index === 0 ? "text-slate-300" : "text-slate-500 active:bg-slate-100"}`} aria-label="Omhoog">↑</button>
+              <button onClick={() => moveSlot(1)} disabled={index === totalSlots-1} className={`w-7 h-7 flex items-center justify-center rounded-lg text-[11px] ${index === totalSlots-1 ? "text-slate-300" : "text-slate-500 active:bg-slate-100"}`} aria-label="Omlaag">↓</button>
+              <button onClick={openSuggestions} className="w-7 h-7 flex items-center justify-center rounded-lg text-[11px] text-slate-500 active:bg-slate-100" aria-label="Opnieuw kiezen">🔄</button>
+              <button onClick={clearActivity} className="w-7 h-7 flex items-center justify-center rounded-lg text-[11px] text-red-500 active:bg-slate-100" aria-label="Verwijder">🗑️</button>
+            </div>
+          )}
+        </div>
+
+        {/* Activity display / edit / empty state */}
+        {!isEditing ? (
+          <div>
+            {hasActivity ? (
+              <button onClick={startEdit}
+                className={`w-full text-left rounded-lg p-2 transition-all cursor-pointer active:scale-[0.99] ${
+                  justGenerated
+                    ? 'ai-shimmer ai-fade-in border border-purple-200 bg-purple-50'
+                    : slot.aiGenerated
+                    ? 'border border-purple-100 bg-purple-50/50 hover:bg-purple-50'
+                    : 'border border-slate-200 bg-slate-50 hover:bg-slate-100'
+                }`}
+                aria-label={`Bewerk: ${slot.activity}`}>
+                <div className="flex items-start gap-1.5">
+                  {slot.aiGenerated && <span className="text-[10px] shrink-0 mt-0.5">✨</span>}
+                  <span className="text-sm leading-snug">{slot.activity}</span>
+                </div>
+              </button>
+            ) : (
+              <div className="flex gap-1.5">
+                <button onClick={openSuggestions}
+                  className="flex-1 h-9 flex items-center justify-center bg-slate-900 text-white rounded-lg font-semibold text-sm active:scale-[0.98] transition"
+                  aria-label="Kies uit suggesties" title="Suggesties">＋</button>
+                <button onClick={startEdit}
+                  className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-sm active:bg-slate-100 shrink-0"
+                  aria-label="Eigen tekst typen" title="Eigen tekst">✏️</button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <input type="text" value={editText} onChange={(e) => setEditText(e.target.value)}
+              className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-sm mb-1.5"
+              placeholder="Type je activiteit..." autoFocus aria-label={`Activiteit voor ${slotInfo.label}`}
+              onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") cancelEdit(); }} />
+            <div className="flex gap-1.5">
+              <button onClick={saveEdit} className="px-3 py-1.5 bg-slate-900 text-white rounded-lg text-sm font-semibold">Opslaan</button>
+              <button onClick={cancelEdit} className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-sm font-semibold">Annuleren</button>
+            </div>
+          </div>
+        )}
+
+        {/* Suggestions panel */}
+        {isActive && (
+          <div className="mt-2 pt-2 border-t border-slate-100">
+            <div className="mb-1.5">
+              <div className="text-xs font-semibold text-slate-600 mb-1">Kies een optie:</div>
+              <div className="space-y-1">
+                {suggestions.map((idea) => (
+                  <button key={idea.t} onClick={() => chooseSuggestion(idea)}
+                    className="w-full text-left p-2 bg-slate-50 hover:bg-slate-100 active:bg-slate-200 border border-slate-100 rounded-lg transition">
+                    <div className="text-sm leading-snug">{idea.t}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-1.5 flex gap-1.5 items-center">
+              <button onClick={refreshSuggestions}
+                className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-sm active:bg-slate-50 shrink-0"
+                aria-label="Andere suggesties" title="Andere suggesties">🎲</button>
+
+              <button onClick={generateMagicActivity} disabled={aiLoading}
+                className={`w-9 h-9 flex items-center justify-center rounded-lg text-sm shrink-0 transition ${
+                  aiLoading
+                    ? 'bg-purple-50 border border-purple-200 animate-pulse'
+                    : 'border border-purple-200 bg-purple-50 active:bg-purple-100'
+                }`} aria-label="Tover activiteit met AI" title="Tover activiteit">
+                ✨
+              </button>
+
+              {(() => { const aiIdeas = loadSavedAIIdeas(); return aiIdeas.length > 0 ? (
+                <button onClick={() => setShowAIHistory(true)}
+                  className="w-9 h-9 flex items-center justify-center rounded-lg border border-purple-200 bg-purple-50 text-sm active:bg-purple-100 shrink-0"
+                  aria-label="Eerder getoverde ideeën" title="Eerder getoverd">📜</button>
+              ) : null; })()}
+
+              <div className="flex-1"></div>
+
+              <button onClick={() => setIsActive(false)}
+                className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-slate-100 text-sm active:bg-slate-200 shrink-0"
+                aria-label="Sluiten" title="Sluiten">✕</button>
+            </div>
+
+            {aiError && <div className="mt-1.5 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-1.5">{aiError}</div>}
+          </div>
+        )}
+
+        {/* AI History modal */}
+        {showAIHistory && (() => {
+          const aiIdeas = loadSavedAIIdeas();
+          return (
+          <Modal onClose={() => setShowAIHistory(false)} label="Eerder getoverde ideeën">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-sm">✨ Getoverde ideeën</h3>
+              {aiIdeas.length > 0 && <button onClick={() => { if (window.confirm('Alle getoverde ideeën wissen?')) { safeSetJSON('dagvuller_ai_ideas', []); setShowAIHistory(false); } }} className="text-xs text-red-600 underline">Wis alles</button>}
+            </div>
+            <div className="flex-1 overflow-auto">
+              {aiIdeas.length === 0 ? <div className="text-center text-slate-400 py-8 text-sm">Nog geen getoverde ideeën</div> : (
+                <div className="space-y-1">
+                  {[...aiIdeas].reverse().map((idea, i) => (
+                    <button key={i} onClick={() => { onUpdatePlan(slot.key, idea.t, true); setShowAIHistory(false); setIsActive(false); }}
+                      className="w-full text-left p-2 bg-purple-50/50 hover:bg-purple-50 active:bg-purple-100 border border-purple-100 rounded-lg transition">
+                      <div className="text-sm leading-snug flex items-start gap-1.5">
+                        <span className="text-[10px] shrink-0 mt-0.5">✨</span>
+                        <div className="flex-1 min-w-0">
+                          <span>{idea.t}</span>
+                          <span className="text-[10px] text-slate-400 ml-1.5">{SLOTS.find(s => s.key === idea.slot)?.emoji || ''}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={() => setShowAIHistory(false)} className="mt-3 w-full px-4 py-2 bg-slate-100 rounded-lg font-semibold text-sm">Sluiten</button>
+          </Modal>
+          );
+        })()}
+
+        {showKeySetup && (
+          <Modal onClose={() => setShowKeySetup(false)} label="API Key instellen">
+            <ApiKeySettings onClose={() => setShowKeySetup(false)} />
+          </Modal>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// --- Main App ---
+
+function DagvullerApp() {
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [plan, setPlan] = useState(() => loadPlanForDate(new Date()));
+  const [todos, setTodos] = useState(loadTodos);
+  const [todoArchive, setTodoArchive] = useState(loadTodoArchive);
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [copyTargetDate, setCopyTargetDate] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => { cleanupOldPlanData(); }, []);
+
+  const currentDateStr = formatDate(currentDate);
+  
+  // Save plan when it changes (but use a ref to track the current date)
+  const currentDateRef = useRef(currentDate);
+  useEffect(() => { currentDateRef.current = currentDate; }, [currentDate]);
+  useEffect(() => { 
+    savePlanForDate(currentDateRef.current, plan); 
+  }, [plan]);
+  
+  // Load plan when date changes
+  useEffect(() => { setPlan(loadPlanForDate(currentDate)); }, [currentDateStr]);
+  
+  useEffect(() => { safeSetJSON('dagvuller_todos_global', todos); }, [todos]);
+  useEffect(() => { safeSetJSON('dagvuller_todo_history', todoArchive); }, [todoArchive]);
+
+  const weekDays = useMemo(() => getWeekDays(currentDate), [currentDateStr]);
+  const weekFillData = useMemo(() => weekDays.map(d => loadPlanForDate(d).filter(p => p.activity).length), [currentDateStr, plan]);
+
+  function handleUpdatePlan(slotKey, value, aiGenerated) {
+    if (slotKey === '__move__') {
+      const { index, direction } = value;
+      const ni = index + direction;
+      if (ni < 0 || ni >= plan.length) return;
+      setPlan(prev => {
+        const next = [...prev];
+        const newA = { ...next[index], activity: next[ni].activity, aiGenerated: next[ni].aiGenerated };
+        const newB = { ...next[ni], activity: next[index].activity, aiGenerated: next[index].aiGenerated };
+        next[index] = newA; next[ni] = newB;
+        return next;
+      });
+    } else {
+      setPlan(prev => prev.map(p => p.key === slotKey ? { ...p, activity: value, aiGenerated: !!aiGenerated } : p));
+    }
+  }
+
+  function copyPlanToDate() {
+    if (!copyTargetDate) return;
+    const existing = loadPlanForDate(new Date(copyTargetDate + 'T00:00:00'));
+    if (existing.some(p => p.activity) && !window.confirm(`Er staat al een planning voor ${formatDateDutch(copyTargetDate)}. Overschrijven?`)) return;
+    safeSetJSON(`dagvuller_plan_${copyTargetDate}`, [...plan]);
+    if (copyTargetDate === currentDateStr) setPlan(loadPlanForDate(currentDate));
+    setShowCopyModal(false); setCopyTargetDate('');
+    alert(`Planning gekopieerd naar ${formatDateDutch(copyTargetDate)}!`);
+  }
+
+  const dateLabel = currentDate.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100">
+      <div className="max-w-xl mx-auto px-3 py-4">
+
+        <header className="mb-3 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-black text-slate-900 leading-tight">Plan je dag</h1>
+            <p className="text-xs text-slate-500">Check je to-do's en vul je dag in</p>
+          </div>
+          <button onClick={() => setShowSettings(true)}
+            className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 text-slate-400 active:bg-slate-50"
+            aria-label="Instellingen" title="AI Instellingen">⚙️</button>
+        </header>
+
+        {showSettings && <Modal onClose={() => setShowSettings(false)} label="Instellingen"><ApiKeySettings onClose={() => setShowSettings(false)} /></Modal>}
+
+        <WeekCalendar currentDate={currentDate} setCurrentDate={setCurrentDate} weekDays={weekDays} weekFillData={weekFillData} />
+
+        <button onClick={() => setShowCopyModal(true)}
+          className="w-full mb-3 px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs font-semibold shadow-sm active:bg-slate-50 text-slate-600">
+          Kopieer planning naar...
+        </button>
+
+        {showCopyModal && (
+          <Modal onClose={() => { setShowCopyModal(false); setCopyTargetDate(''); }} label="Kopieer planning">
+            <h3 className="font-bold mb-3 text-sm">Kopieer naar welke datum?</h3>
+            <input type="date" value={copyTargetDate} onChange={(e) => setCopyTargetDate(e.target.value)}
+              className="w-full px-3 py-2 border border-slate-200 rounded-lg mb-3" aria-label="Kies datum" />
+            <div className="flex gap-2">
+              <button onClick={copyPlanToDate} disabled={!copyTargetDate}
+                className={`flex-1 px-4 py-2 rounded-lg font-semibold text-sm ${copyTargetDate ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-400'}`}>Kopieer</button>
+              <button onClick={() => { setShowCopyModal(false); setCopyTargetDate(''); }}
+                className="px-4 py-2 bg-slate-100 rounded-lg font-semibold text-sm">Annuleren</button>
+            </div>
+          </Modal>
+        )}
+
+        <div className="mb-2 text-xs font-semibold text-slate-500 capitalize">{dateLabel}</div>
+
+        <TodoList todos={todos} setTodos={setTodos} todoArchive={todoArchive} setTodoArchive={setTodoArchive} />
+
+        <section aria-label="Dagindeling">
+          <div className="space-y-1.5 mb-6">
+            {plan.map((slot, index) => (
+              <SlotCard key={slot.key} slot={slot} slotInfo={SLOTS.find(s => s.key === slot.key)}
+                index={index} totalSlots={plan.length} onUpdatePlan={handleUpdatePlan}
+                allSlotActivities={plan.filter(p => p.activity).map(p => p.activity)} />
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<DagvullerApp />);
+    </script>
+</body>
+</html>
