@@ -38,7 +38,6 @@ const { useState, useEffect, useMemo, useRef } = React;
 // --- Constants ---
 
 const MAX_ARCHIVE_SIZE = 50;
-const MAX_UNDO_STEPS = 10;
 const PLAN_DATA_MAX_AGE_DAYS = 90;
 
 const SLOT_CATEGORIES = {
@@ -403,23 +402,19 @@ function TodoList({ todos, setTodos, todoArchive, setTodoArchive }) {
   const [editingTodo, setEditingTodo] = useState(null);
   const [editTodoText, setEditTodoText] = useState("");
   const [newTodo, setNewTodo] = useState("");
-  const [undoStack, setUndoStack] = useState([]);
   const [showHistory, setShowHistory] = useState(false);
 
-  function addToUndo(old) { setUndoStack(prev => [...prev.slice(-(MAX_UNDO_STEPS-1)), old]); }
-  function toggleTodo(id) { addToUndo([...todos]); setTodos(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t)); }
-  function addTodo() { if (newTodo.trim()) { addToUndo([...todos]); setTodos(prev => [...prev, { id: generateId(), text: newTodo.trim(), done: false }]); setNewTodo(""); } }
+  function toggleTodo(id) { setTodos(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t)); }
+  function addTodo() { if (newTodo.trim()) { setTodos(prev => [...prev, { id: generateId(), text: newTodo.trim(), done: false }]); setNewTodo(""); } }
 
   function deleteTodo(id) {
     const found = todos.find(item => item.id === id); if (!found) return;
-    addToUndo([...todos]);
     setTodoArchive(prev => [...prev, { text: found.text, deletedAt: new Date().toISOString() }].slice(-MAX_ARCHIVE_SIZE));
     setTodos(prev => prev.filter(item => item.id !== id));
   }
 
   function clearCompleted() {
     const done = todos.filter(t => t.done); if (!done.length) return;
-    addToUndo([...todos]);
     const now = new Date().toISOString();
     setTodoArchive(prev => [...prev, ...done.map(t => ({ text: t.text, deletedAt: now }))].slice(-MAX_ARCHIVE_SIZE));
     setTodos(prev => prev.filter(t => !t.done));
@@ -427,14 +422,12 @@ function TodoList({ todos, setTodos, todoArchive, setTodoArchive }) {
 
   function moveTodo(i, dir) {
     const ni = i + dir; if (ni < 0 || ni >= todos.length) return;
-    addToUndo([...todos]);
     setTodos(prev => { const n = [...prev]; [n[i], n[ni]] = [n[ni], n[i]]; return n; });
   }
 
   function startEditTodo(id) { const found = todos.find(item => item.id === id); if (found) { setEditingTodo(id); setEditTodoText(found.text); } }
-  function saveEditTodo() { if (editTodoText.trim() && editingTodo !== null) { addToUndo([...todos]); setTodos(prev => prev.map(item => item.id === editingTodo ? { ...item, text: editTodoText.trim() } : item)); } setEditingTodo(null); setEditTodoText(""); }
+  function saveEditTodo() { if (editTodoText.trim() && editingTodo !== null) { setTodos(prev => prev.map(item => item.id === editingTodo ? { ...item, text: editTodoText.trim() } : item)); } setEditingTodo(null); setEditTodoText(""); }
   function cancelEditTodo() { setEditingTodo(null); setEditTodoText(""); }
-  function undoTodo() { if (undoStack.length > 0) { setTodos(undoStack[undoStack.length - 1]); setUndoStack(prev => prev.slice(0, -1)); } }
   function restoreTodo(idx) { setTodos(prev => [...prev, { id: generateId(), text: todoArchive[idx].text, done: false }]); setTodoArchive(prev => prev.filter((_, i) => i !== idx)); }
 
   const completedCount = todos.filter(t => t.done).length;
@@ -445,7 +438,6 @@ function TodoList({ todos, setTodos, todoArchive, setTodoArchive }) {
         <h2 className="font-bold text-sm">To-do's</h2>
         <div className="flex gap-1">
           {completedCount > 0 && <button onClick={clearCompleted} className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg text-[11px]" aria-label={`Wis ${completedCount} voltooide`} title="Wis voltooide">✔</button>}
-          {undoStack.length > 0 && <button onClick={undoTodo} className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg text-sm" aria-label="Ongedaan maken" title="Ongedaan maken">↶</button>}
           <button onClick={() => setShowHistory(true)} className="w-8 h-8 flex items-center justify-center bg-slate-100 border border-slate-200 rounded-lg text-[11px]" aria-label="Geschiedenis" title="Geschiedenis">📜</button>
         </div>
       </div>
