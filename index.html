@@ -733,7 +733,7 @@ function DagvullerApp() {
   useEffect(() => { safeSetJSON('dagvuller_todo_history', todoArchive); }, [todoArchive]);
 
   const weekDays = useMemo(() => getWeekDays(currentDate), [currentDateStr]);
-  const weekFillData = useMemo(() => weekDays.map(d => loadPlanForDate(d).filter(p => p.activity).length), [currentDateStr, plan]);
+  const weekFillData = useMemo(() => weekDays.map(d => (isSameDay(d, currentDate) ? plan : loadPlanForDate(d)).filter(p => p.activity).length), [currentDateStr, plan]);
 
   function handleUpdatePlan(slotKey, value, aiGenerated) {
     if (slotKey === '__move__') {
