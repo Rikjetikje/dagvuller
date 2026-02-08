@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Dagvuller - Boodschappenlijst</title>
+    <title>Boodschappen</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -30,6 +30,50 @@ const FREQUENCY_OPTIONS = [
 ];
 
 const FREQUENCY_DAYS = { weekly: 7, biweekly: 14, monthly: 30 };
+
+const MIN_PURCHASES_FOR_SUGGESTION = 3; // Minimaal 3x gekocht voordat we een patroon suggereren
+
+// --- Patroondetectie ---
+
+function detectRecurringPattern(purchaseDates) {
+  if (!purchaseDates || purchaseDates.length < MIN_PURCHASES_FOR_SUGGESTION) return null;
+
+  // Sorteer datums chronologisch
+  const sorted = [...purchaseDates].map(d => new Date(d).getTime()).sort((a, b) => a - b);
+
+  // Bereken intervallen tussen aankopen in dagen
+  const intervals = [];
+  for (let i = 1; i < sorted.length; i++) {
+    intervals.push((sorted[i] - sorted[i - 1]) / (1000 * 60 * 60 * 24));
+  }
+
+  if (intervals.length < 2) return null;
+
+  // Gemiddeld interval
+  const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+
+  // Standaarddeviatie - als die te hoog is, is er geen duidelijk patroon
+  const variance = intervals.reduce((sum, iv) => sum + Math.pow(iv - avgInterval, 2), 0) / intervals.length;
+  const stdDev = Math.sqrt(variance);
+
+  // Patroon is consistent genoeg als stdDev < 50% van gemiddelde
+  if (stdDev > avgInterval * 0.5) return null;
+
+  // Map naar dichtstbijzijnde frequentie
+  let frequency, label;
+  if (avgInterval <= 10) {
+    frequency = 'weekly';
+    label = 'elke week';
+  } else if (avgInterval <= 21) {
+    frequency = 'biweekly';
+    label = 'om de week';
+  } else {
+    frequency = 'monthly';
+    label = 'elke maand';
+  }
+
+  return { avgInterval: Math.round(avgInterval), frequency, label };
+}
 
 const UNIT_OPTIONS = ['stuks', 'pakken', 'liter', 'kg', 'gram', 'bossen', 'bakjes', 'zakken', 'flessen', 'blikken', 'potten', 'dozen', ''];
 
@@ -610,9 +654,40 @@ function RecipeFormModal({ recipe, onSave, onClose }) {
 
 // --- Vaste Boodschappen Tab ---
 
-function RegularsTab({ regulars, setRegulars }) {
+function RegularsTab({ regulars, setRegulars, history, dismissedSuggestions, setDismissedSuggestions }) {
   const [showForm, setShowForm] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
+
+  // Detecteer terugkerende patronen uit koophistorie
+  const suggestions = useMemo(() => {
+    const regularNames = new Set(regulars.map(r => r.name.toLowerCase()));
+    const dismissed = new Set(dismissedSuggestions.map(d => d.toLowerCase()));
+
+    return history
+      .filter(h => !regularNames.has(h.name.toLowerCase()) && !dismissed.has(h.name.toLowerCase()))
+      .map(h => {
+        const pattern = detectRecurringPattern(h.dates);
+        if (!pattern) return null;
+        return { ...h, pattern };
+      })
+      .filter(Boolean);
+  }, [history, regulars, dismissedSuggestions]);
+
+  function acceptSuggestion(item) {
+    setRegulars(prev => [...prev, {
+      id: genId(),
+      name: item.name,
+      amount: item.lastAmount || 0,
+      unit: item.lastUnit || 'stuks',
+      frequency: item.pattern.frequency,
+      category: item.category || 'Overig',
+      lastAdded: item.lastBought,
+    }]);
+  }
+
+  function dismissSuggestion(name) {
+    setDismissedSuggestions(prev => [...prev, name]);
+  }
 
   function deleteItem(id) {
     setRegulars(prev => prev.filter(r => r.id !== id));
@@ -639,16 +714,48 @@ function RegularsTab({ regulars, setRegulars }) {
         Stel producten in die je regelmatig koopt. De app laat zien wanneer het tijd is om ze weer te kopen.
       </p>
 
+      {/* Suggesties op basis van koophistorie */}
+      {suggestions.length > 0 && (
+        <div className="mb-4">
+          <div className="text-[11px] font-semibold text-amber-600 uppercase tracking-wide px-1 mb-1.5">Suggesties op basis van je aankopen</div>
+          <div className="space-y-1.5">
+            {suggestions.map(item => (
+              <div key={item.name} className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-sm">{item.name}</div>
+                    <div className="text-[11px] text-slate-500">
+                      {item.count}x gekocht · gemiddeld elke ~{item.pattern.avgInterval} dagen
+                    </div>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => acceptSuggestion(item)}
+                    className="flex-1 px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold">
+                    Toevoegen als {item.pattern.label}
+                  </button>
+                  <button onClick={() => dismissSuggestion(item.name)}
+                    className="px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-semibold text-slate-500">
+                    Nee
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <button onClick={() => { setEditingItem(null); setShowForm(true); }}
         className="w-full px-4 py-3 bg-emerald-600 text-white rounded-xl font-semibold text-sm mb-4">
         + Nieuw vast product
       </button>
 
-      {regulars.length === 0 ? (
+      {regulars.length === 0 && suggestions.length === 0 ? (
         <div className="text-center py-12 text-slate-400">
           <div className="text-4xl mb-2">🔄</div>
           <div className="text-sm">Nog geen vaste boodschappen</div>
           <div className="text-xs mt-1">bijv. 6 pakken melk elke week</div>
+          <div className="text-xs mt-0.5">Suggesties verschijnen automatisch na een paar aankopen</div>
         </div>
       ) : (
         <div className="space-y-2">
@@ -829,12 +936,14 @@ function App() {
   const [recipes, setRecipes] = useState(() => safeGet('dv_recipes', []));
   const [regulars, setRegulars] = useState(() => safeGet('dv_regulars', []));
   const [history, setHistory] = useState(() => safeGet('dv_history', []));
+  const [dismissedSuggestions, setDismissedSuggestions] = useState(() => safeGet('dv_dismissed', []));
 
   // Persist state
   useEffect(() => { safeSet('dv_list', list); }, [list]);
   useEffect(() => { safeSet('dv_recipes', recipes); }, [recipes]);
   useEffect(() => { safeSet('dv_regulars', regulars); }, [regulars]);
   useEffect(() => { safeSet('dv_history', history); }, [history]);
+  useEffect(() => { safeSet('dv_dismissed', dismissedSuggestions); }, [dismissedSuggestions]);
 
   // Track purchase history when items are completed
   function handleComplete(completedItems) {
@@ -842,10 +951,13 @@ function App() {
     setHistory(prev => {
       const updated = [...prev];
       completedItems.forEach(item => {
+        const now = new Date().toISOString();
         const existing = updated.find(h => h.name.toLowerCase() === item.name.toLowerCase());
         if (existing) {
           existing.count += 1;
-          existing.lastBought = new Date().toISOString();
+          existing.lastBought = now;
+          if (!existing.dates) existing.dates = [existing.lastBought];
+          existing.dates.push(now);
           if (item.amount) existing.lastAmount = item.amount;
           if (item.unit) existing.lastUnit = item.unit;
           if (item.category) existing.category = item.category;
@@ -853,7 +965,8 @@ function App() {
           updated.push({
             name: item.name,
             count: 1,
-            lastBought: new Date().toISOString(),
+            lastBought: now,
+            dates: [now],
             lastAmount: item.amount || '',
             lastUnit: item.unit || '',
             category: item.category || 'Overig',
@@ -884,13 +997,12 @@ function App() {
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 pb-20">
       <div className="max-w-xl mx-auto px-3 pt-4">
         <header className="mb-4">
-          <h1 className="text-xl font-black text-slate-900 leading-tight">Dagvuller</h1>
-          <p className="text-xs text-slate-500">Boodschappenlijst</p>
+          <h1 className="text-xl font-black text-slate-900 leading-tight">Boodschappen</h1>
         </header>
 
         {tab === 'list' && <ShoppingListTab list={list} setList={setList} onComplete={handleComplete} recipes={recipes} regulars={regulars} />}
         {tab === 'recipes' && <RecipesTab recipes={recipes} setRecipes={setRecipes} />}
-        {tab === 'regulars' && <RegularsTab regulars={regulars} setRegulars={setRegulars} />}
+        {tab === 'regulars' && <RegularsTab regulars={regulars} setRegulars={setRegulars} history={history} dismissedSuggestions={dismissedSuggestions} setDismissedSuggestions={setDismissedSuggestions} />}
         {tab === 'frequent' && <FrequentTab history={history} list={list} setList={setList} />}
       </div>
 
