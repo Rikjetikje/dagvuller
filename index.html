@@ -353,9 +353,9 @@ function WeekCalendar({ currentDate, setCurrentDate, weekDays, weekFillData }) {
   const today = useMemo(() => new Date(), []);
 
   function changeWeek(dir) {
-    const d = new Date(currentDate);
-    d.setDate(d.getDate() + dir * 7);
-    setCurrentDate(d);
+    const mon = new Date(weekDays[0]);
+    mon.setDate(mon.getDate() + dir * 7);
+    setCurrentDate(mon);
   }
 
   const isCurrentWeek = weekDays.some(d => isSameDay(d, today));
