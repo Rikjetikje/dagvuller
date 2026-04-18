@@ -25,12 +25,7 @@
       margin-bottom: 6px;
       letter-spacing: 3px;
     }
-    #canvasWrapper {
-      width: 100%;
-      max-width: 800px;
-      display: flex;
-      justify-content: center;
-    }
+    #canvasWrapper { width: 100%; max-width: 800px; }
     #gameCanvas {
       border: 3px solid #ffd700;
       border-radius: 4px;
@@ -63,16 +58,17 @@
     <canvas id="gameCanvas" width="800" height="450"></canvas>
   </div>
   <div id="controls">
-    <span>Toetsenbord:</span> A/D + W springen &nbsp;|&nbsp; ←/→ + ↑ springen &nbsp;|&nbsp; <span>ENTER</span> nieuw spel
+    <span>Toetsenbord P1:</span> A/D + W &nbsp;|&nbsp;
+    <span>P2:</span> ←/→ + ↑ &nbsp;|&nbsp;
+    <span>ENTER</span> menu
   </div>
-  <div id="touchHint">📱 Mobiel: sleep je helft om te bewegen · loslaten = springen</div>
+  <div id="touchHint">📱 Sleep je helft · loslaten = springen</div>
 
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
-    const W = canvas.width;
-    const H = canvas.height;
+    const W = canvas.width, H = canvas.height;
     const GROUND = H - 60;
     const NET_X = W / 2;
     const NET_H = 110;
@@ -84,31 +80,107 @@
     const PLAYER_R = 28;
     const WIN_SCORE = 7;
 
-    let confetti = [];
+    // ── Modes ────────────────────────────────────────────────────
+    // 'menu' | '1p' | '2p'
+    let gameMode = 'menu';
 
-    // ── Touch state ──────────────────────────────────────────────
-    // touches[0/1] = { active, startX, currentX, lastX }
+    // ── AI state ─────────────────────────────────────────────────
+    const ai = {
+      frameCounter: 0,
+      targetX: W * 0.8,
+      wantsJump: false,
+      reactionDelay: 6, // frames before reacting
+    };
+
+    function updateAI() {
+      const b = state.ball;
+      const p = state.players[1];
+      ai.frameCounter++;
+
+      if (ai.frameCounter < ai.reactionDelay) return;
+      ai.frameCounter = 0;
+
+      // Predict where ball will be — simple forward simulation
+      let bx = b.x, by = b.y, bvx = b.vx, bvy = b.vy;
+      for (let i = 0; i < 40; i++) {
+        bvy += GRAVITY * 0.85;
+        bx += bvx; by += bvy;
+        if (bx < BALL_RADIUS)      { bx = BALL_RADIUS;     bvx =  Math.abs(bvx); }
+        if (bx > W - BALL_RADIUS)  { bx = W - BALL_RADIUS; bvx = -Math.abs(bvx); }
+        if (by + BALL_RADIUS >= GROUND) break;
+        // Bounce off net
+        if (by + BALL_RADIUS > NET_TOP) {
+          const nl = NET_X - 30, nr = NET_X + 30;
+          if (bx + BALL_RADIUS > nl && bx - BALL_RADIUS < nr) {
+            if (bx < NET_X) bvx = -Math.abs(bvx);
+            else            bvx =  Math.abs(bvx);
+          }
+        }
+      }
+
+      // Only care if ball is (heading) to AI side
+      if (b.x > NET_X || b.vx > 1) {
+        ai.targetX = Math.max(NET_X + 40, Math.min(W - PLAYER_R, bx));
+      } else {
+        // Ball on human side — drift back toward center-right
+        ai.targetX = W * 0.75;
+      }
+
+      // Jump decision: ball is on AI's side, relatively close, and falling
+      const distToBall = Math.hypot(b.x - p.x, b.y - (p.y - PLAYER_R));
+      const ballOnAiSide = b.x > NET_X;
+      const ballFalling  = b.vy > -2;
+      const ballReachable = b.y > GROUND - 260 && b.y < GROUND - 20;
+
+      ai.wantsJump = ballOnAiSide && ballFalling && ballReachable && distToBall < 160;
+    }
+
+    function applyAI(p) {
+      const dx = ai.targetX - p.x;
+      const speed = PLAYER_SPEED * 0.9;
+      if (dx < -4) { p.x -= speed; p.face = -1; }
+      else if (dx > 4) { p.x += speed; p.face = 1; }
+
+      if (ai.wantsJump && p.onGround) {
+        p.vy = JUMP_FORCE;
+        p.onGround = false;
+        ai.wantsJump = false;
+      }
+    }
+
+    // ── Touch ────────────────────────────────────────────────────
     const touches = [
-      { active: false, startX: 0, currentX: 0, lastX: 0 },
-      { active: false, startX: 0, currentX: 0, lastX: 0 },
+      { active: false, startX: 0, currentX: 0, lastX: 0, id: -1, shouldJump: false },
+      { active: false, startX: 0, currentX: 0, lastX: 0, id: -1, shouldJump: false },
     ];
 
     function canvasX(clientX) {
       const rect = canvas.getBoundingClientRect();
       return (clientX - rect.left) * (W / rect.width);
     }
-
-    function playerIdxForTouch(cx) {
-      return cx < W / 2 ? 0 : 1;
+    function canvasY(clientY) {
+      const rect = canvas.getBoundingClientRect();
+      return (clientY - rect.top) * (H / rect.height);
     }
 
     canvas.addEventListener('touchstart', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
         const cx = canvasX(t.clientX);
-        const idx = playerIdxForTouch(cx);
+        const cy = canvasY(t.clientY);
+
+        if (gameMode === 'menu') {
+          handleMenuTap(cx, cy);
+          continue;
+        }
+        if (state.winner !== null) { resetGame(); continue; }
+
+        // In 1p mode only left half is human-controlled
+        const maxIdx = gameMode === '1p' ? 0 : 1;
+        const idx = cx < W / 2 ? 0 : 1;
+        if (idx > maxIdx) continue;
         if (!touches[idx].active) {
-          touches[idx] = { active: true, startX: cx, currentX: cx, lastX: cx, id: t.identifier };
+          touches[idx] = { active: true, startX: cx, currentX: cx, lastX: cx, id: t.identifier, shouldJump: false };
         }
       }
     }, { passive: false });
@@ -131,7 +203,7 @@
         for (const td of touches) {
           if (td.active && td.id === t.identifier) {
             td.active = false;
-            td.shouldJump = true; // jump on release
+            td.shouldJump = true;
           }
         }
       }
@@ -140,9 +212,7 @@
     canvas.addEventListener('touchcancel', e => {
       for (const t of e.changedTouches) {
         for (const td of touches) {
-          if (td.active && td.id === t.identifier) {
-            td.active = false;
-          }
+          if (td.active && td.id === t.identifier) td.active = false;
         }
       }
     });
@@ -151,18 +221,84 @@
     const keys = {};
     document.addEventListener('keydown', e => {
       keys[e.key] = true;
-      if (e.key === 'Enter' && state.winner !== null) resetGame();
+      if (e.key === 'Enter') {
+        if (gameMode !== 'menu') { gameMode = 'menu'; return; }
+      }
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
     });
     document.addEventListener('keyup', e => { keys[e.key] = false; });
 
-    // ── Game state ────────────────────────────────────────────────
-    const state = {
-      score: [0, 0],
-      winner: null,
-      ball: null,
-      players: [{}, {}],
+    // Mouse click for menu
+    canvas.addEventListener('click', e => {
+      if (gameMode !== 'menu') return;
+      const rect = canvas.getBoundingClientRect();
+      const cx = (e.clientX - rect.left) * (W / rect.width);
+      const cy = (e.clientY - rect.top)  * (H / rect.height);
+      handleMenuTap(cx, cy);
+    });
+
+    // ── Menu ─────────────────────────────────────────────────────
+    const BTN = {
+      oneP: { x: W/2 - 160, y: H/2 - 10, w: 140, h: 54 },
+      twoP: { x: W/2 + 20,  y: H/2 - 10, w: 140, h: 54 },
     };
+
+    function handleMenuTap(cx, cy) {
+      if (inBtn(BTN.oneP, cx, cy)) { gameMode = '1p'; resetGame(); }
+      if (inBtn(BTN.twoP, cx, cy)) { gameMode = '2p'; resetGame(); }
+    }
+
+    function inBtn(b, cx, cy) {
+      return cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h;
+    }
+
+    function drawMenu() {
+      drawBackground();
+
+      // Title box
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      ctx.roundRect(W/2 - 220, H/2 - 130, 440, 220, 16);
+      ctx.fill();
+      ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2;
+      ctx.roundRect(W/2 - 220, H/2 - 130, 440, 220, 16);
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 30px Georgia';
+      ctx.fillStyle = '#ffd700';
+      ctx.shadowColor = '#ff6600'; ctx.shadowBlur = 12;
+      ctx.fillText('Kies een modus', W/2, H/2 - 55);
+      ctx.shadowBlur = 0;
+
+      drawMenuBtn(BTN.oneP, '🤖 1 Speler', '#cc0000', '#8B0000');
+      drawMenuBtn(BTN.twoP, '👥 2 Spelers', '#0044cc', '#002288');
+
+      ctx.font = '13px Georgia';
+      ctx.fillStyle = '#ffcc8888';
+      ctx.fillText('Tik of klik om te kiezen', W/2, H/2 + 90);
+
+      ctx.restore();
+    }
+
+    function drawMenuBtn(b, label, color, shadow) {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.shadowColor = shadow; ctx.shadowBlur = 10;
+      ctx.roundRect(b.x, b.y, b.w, b.h, 10);
+      ctx.fill();
+      ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2; ctx.shadowBlur = 0;
+      ctx.roundRect(b.x, b.y, b.w, b.h, 10);
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 17px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, b.x + b.w / 2, b.y + b.h / 2 + 6);
+      ctx.restore();
+    }
+
+    // ── Game state ────────────────────────────────────────────────
+    const state = { score: [0, 0], winner: null, ball: null, players: [{}, {}] };
 
     function resetGame() {
       state.score = [0, 0];
@@ -176,67 +312,60 @@
         x: lastScorer === 0 ? W * 0.25 : W * 0.75,
         y: GROUND - 200,
         vx: lastScorer === 0 ? 3 : -3,
-        vy: -4,
-        angle: 0,
+        vy: -4, angle: 0,
       };
       state.players[0] = { x: W * 0.2, y: GROUND, vy: 0, onGround: true, face: 1 };
       state.players[1] = { x: W * 0.8, y: GROUND, vy: 0, onGround: true, face: -1 };
       touches[0].shouldJump = false;
       touches[1].shouldJump = false;
+      ai.wantsJump = false;
+      ai.frameCounter = 0;
+      ai.targetX = W * 0.8;
     }
 
     resetGame();
 
+    let confetti = [];
+
     // ── Physics ───────────────────────────────────────────────────
     function updatePhysics() {
-      if (state.winner !== null) return;
-
+      if (state.winner !== null || gameMode === 'menu') return;
       const b = state.ball;
 
+      // AI update
+      if (gameMode === '1p') updateAI();
+
       function movePlayer(p, idx, left, right, jump) {
-        // Keyboard
-        let movingLeft  = !!keys[left];
-        let movingRight = !!keys[right];
-        let wantsJump   = !!(keys[jump] && p.onGround);
-
-        // Touch
-        const td = touches[idx];
-        if (td.active) {
-          const dx = td.currentX - td.lastX;
-          if (dx < -0.5) movingLeft  = true;
-          if (dx >  0.5) movingRight = true;
-          td.lastX = td.currentX;
+        if (gameMode === '1p' && idx === 1) {
+          applyAI(p);
+        } else {
+          let ml = !!keys[left], mr = !!keys[right], mj = !!(keys[jump] && p.onGround);
+          const td = touches[idx];
+          if (td.active) {
+            const dx = td.currentX - td.lastX;
+            if (dx < -0.5) ml = true;
+            if (dx >  0.5) mr = true;
+            td.lastX = td.currentX;
+          }
+          if (td.shouldJump && p.onGround) { mj = true; td.shouldJump = false; }
+          if (ml) { p.x -= PLAYER_SPEED; p.face = -1; }
+          if (mr) { p.x += PLAYER_SPEED; p.face =  1; }
+          if (mj) { p.vy = JUMP_FORCE; p.onGround = false; }
         }
-        if (td.shouldJump && p.onGround) {
-          wantsJump = true;
-          td.shouldJump = false;
-        }
-
-        if (movingLeft)  { p.x -= PLAYER_SPEED; p.face = -1; }
-        if (movingRight) { p.x += PLAYER_SPEED; p.face =  1; }
-        if (wantsJump)   { p.vy = JUMP_FORCE; p.onGround = false; }
-
-        p.vy += GRAVITY;
-        p.y  += p.vy;
+        p.vy += GRAVITY; p.y += p.vy;
         if (p.y >= GROUND) { p.y = GROUND; p.vy = 0; p.onGround = true; }
       }
 
       movePlayer(state.players[0], 0, 'a', 'd', 'w');
       movePlayer(state.players[1], 1, 'ArrowLeft', 'ArrowRight', 'ArrowUp');
-
       state.players[0].x = Math.max(PLAYER_R, Math.min(NET_X - 40, state.players[0].x));
       state.players[1].x = Math.max(NET_X + 40, Math.min(W - PLAYER_R, state.players[1].x));
 
-      b.vy += GRAVITY * 0.85;
-      b.x  += b.vx;
-      b.y  += b.vy;
-      b.angle += b.vx * 0.05;
+      b.vy += GRAVITY * 0.85; b.x += b.vx; b.y += b.vy; b.angle += b.vx * 0.05;
+      if (b.x - BALL_RADIUS < 0)  { b.x = BALL_RADIUS;     b.vx =  Math.abs(b.vx) * 0.8; }
+      if (b.x + BALL_RADIUS > W)  { b.x = W - BALL_RADIUS; b.vx = -Math.abs(b.vx) * 0.8; }
+      if (b.y - BALL_RADIUS < 30) { b.y = 30 + BALL_RADIUS; b.vy = Math.abs(b.vy) * 0.7; }
 
-      if (b.x - BALL_RADIUS < 0)  { b.x = BALL_RADIUS;      b.vx =  Math.abs(b.vx) * 0.8; }
-      if (b.x + BALL_RADIUS > W)  { b.x = W - BALL_RADIUS;  b.vx = -Math.abs(b.vx) * 0.8; }
-      if (b.y - BALL_RADIUS < 30) { b.y = 30 + BALL_RADIUS; b.vy =  Math.abs(b.vy) * 0.7; }
-
-      // Net
       if (b.y + BALL_RADIUS > NET_TOP && b.y - BALL_RADIUS < GROUND) {
         const nl = NET_X - 30, nr = NET_X + 30;
         if (b.x + BALL_RADIUS > nl && b.x - BALL_RADIUS < nr) {
@@ -245,20 +374,14 @@
         }
       }
 
-      // Ground → point
       if (b.y + BALL_RADIUS >= GROUND) {
         const scorer = b.x < NET_X ? 1 : 0;
         state.score[scorer]++;
-        if (state.score[scorer] >= WIN_SCORE) {
-          state.winner = scorer;
-          spawnConfetti();
-        } else {
-          resetRound(scorer);
-        }
+        if (state.score[scorer] >= WIN_SCORE) { state.winner = scorer; spawnConfetti(); }
+        else resetRound(scorer);
         return;
       }
 
-      // Player-ball collision
       for (let i = 0; i < 2; i++) {
         const p = state.players[i];
         const px = p.x, py = p.y - PLAYER_R * 0.7;
@@ -267,8 +390,7 @@
         const minDist = BALL_RADIUS + PLAYER_R * 0.9;
         if (dist < minDist && dist > 0) {
           const nx = dx / dist, ny = dy / dist;
-          b.x = px + nx * minDist;
-          b.y = py + ny * minDist;
+          b.x = px + nx * minDist; b.y = py + ny * minDist;
           const dot = b.vx * nx + b.vy * ny;
           const boost = i === 0
             ? (keys['d'] || (touches[0].active && touches[0].currentX > touches[0].lastX) ? 2 : 0)
@@ -303,139 +425,108 @@
 
     // ── Drawing ───────────────────────────────────────────────────
     function drawBackground() {
-      ctx.fillStyle = '#1a0a2e';
-      ctx.fillRect(0, 0, W, H);
-
-      const sw = 50;
+      ctx.fillStyle = '#1a0a2e'; ctx.fillRect(0, 0, W, H);
       const sc = ['#cc0000', '#ffffff', '#ffd700'];
-      for (let i = 0; i < Math.ceil(W / sw); i++) {
-        ctx.fillStyle = sc[i % sc.length];
-        ctx.fillRect(i * sw, 0, sw, 30);
+      for (let i = 0; i < Math.ceil(W / 50); i++) {
+        ctx.fillStyle = sc[i % sc.length]; ctx.fillRect(i * 50, 0, 50, 30);
       }
-      ctx.fillStyle = '#8B0000';
-      ctx.fillRect(0, 28, W, 4);
-
+      ctx.fillStyle = '#8B0000'; ctx.fillRect(0, 28, W, 4);
       const grd = ctx.createLinearGradient(0, GROUND - 10, 0, H);
-      grd.addColorStop(0, '#8B4513');
-      grd.addColorStop(1, '#5C2D0A');
-      ctx.fillStyle = grd;
-      ctx.fillRect(0, GROUND, W, H - GROUND);
-
-      ctx.strokeStyle = '#a0522d44';
-      ctx.lineWidth = 1;
+      grd.addColorStop(0, '#8B4513'); grd.addColorStop(1, '#5C2D0A');
+      ctx.fillStyle = grd; ctx.fillRect(0, GROUND, W, H - GROUND);
+      ctx.strokeStyle = '#a0522d44'; ctx.lineWidth = 1;
       for (let i = 0; i < 8; i++) {
         ctx.beginPath(); ctx.moveTo(0, GROUND + i * 8); ctx.lineTo(W, GROUND + i * 8); ctx.stroke();
       }
-
       ctx.fillStyle = '#ffffff88';
       for (let i = 0; i < 30; i++) {
         ctx.beginPath();
-        ctx.arc((i * 137 + 50) % (W - 20) + 10, (i * 97 + 40) % (GROUND - 40) + 10, 1.5, 0, Math.PI * 2);
+        ctx.arc((i*137+50)%(W-20)+10, (i*97+40)%(GROUND-40)+10, 1.5, 0, Math.PI*2);
         ctx.fill();
       }
-
       drawSpotlight(W * 0.25, '#ffffff22');
       drawSpotlight(W * 0.75, '#ffaa0022');
-
-      // Touch zone divider hint (subtle)
-      ctx.strokeStyle = '#ffffff11';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([6, 8]);
-      ctx.beginPath(); ctx.moveTo(W / 2, 34); ctx.lineTo(W / 2, GROUND); ctx.stroke();
-      ctx.setLineDash([]);
+      if (gameMode !== 'menu') {
+        ctx.strokeStyle = '#ffffff11'; ctx.lineWidth = 1; ctx.setLineDash([6, 8]);
+        ctx.beginPath(); ctx.moveTo(W/2, 34); ctx.lineTo(W/2, GROUND); ctx.stroke();
+        ctx.setLineDash([]);
+      }
     }
 
     function drawSpotlight(cx, color) {
       const grd = ctx.createRadialGradient(cx, 30, 10, cx, GROUND, 200);
-      grd.addColorStop(0, color);
-      grd.addColorStop(1, 'transparent');
-      ctx.fillStyle = grd;
-      ctx.fillRect(cx - 200, 0, 400, GROUND);
+      grd.addColorStop(0, color); grd.addColorStop(1, 'transparent');
+      ctx.fillStyle = grd; ctx.fillRect(cx - 200, 0, 400, GROUND);
     }
 
     function drawTouchIndicator(idx) {
+      if (gameMode === '1p' && idx === 1) return;
       const td = touches[idx];
       if (!td.active) return;
       const p = state.players[idx];
-      // Subtle arc below player showing drag
       ctx.save();
-      ctx.strokeStyle = idx === 0 ? '#cc000055' : '#0044cc55';
+      ctx.strokeStyle = idx === 0 ? '#cc000066' : '#0044cc66';
       ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(p.x, GROUND + 15, 18, Math.PI, 0);
-      ctx.stroke();
-      // Arrow indicating drag direction
-      const dx = td.currentX - td.startX;
-      const arrowX = Math.max(10, Math.min(W - 10, p.x + Math.sign(dx) * 28));
+      ctx.beginPath(); ctx.arc(p.x, GROUND + 15, 18, Math.PI, 0); ctx.stroke();
+      const arrowX = Math.max(10, Math.min(W-10, p.x + Math.sign(td.currentX - td.startX) * 28));
       ctx.strokeStyle = idx === 0 ? '#cc0000aa' : '#0044ccaa';
       ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(p.x, GROUND + 15);
-      ctx.lineTo(arrowX, GROUND + 15);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(p.x, GROUND+15); ctx.lineTo(arrowX, GROUND+15); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawAIIndicator() {
+      const p = state.players[1];
+      ctx.save();
+      ctx.font = '13px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#ff660099';
+      ctx.fillText('🤖', p.x, p.y - PLAYER_R * 2.6);
       ctx.restore();
     }
 
     function drawNet() {
-      ctx.fillStyle = '#ffd700';
-      ctx.fillRect(NET_X - 5, NET_TOP - 10, 10, NET_H + 10);
-      ctx.strokeStyle = '#ffffffcc';
-      ctx.lineWidth = 1.5;
+      ctx.fillStyle = '#ffd700'; ctx.fillRect(NET_X - 5, NET_TOP - 10, 10, NET_H + 10);
+      ctx.strokeStyle = '#ffffffcc'; ctx.lineWidth = 1.5;
       const cols = 8, rows = 6, nw = 60, nh = NET_H;
       for (let c = 0; c <= cols; c++) {
         ctx.beginPath();
         ctx.moveTo(NET_X - nw/2 + c*(nw/cols), NET_TOP);
-        ctx.lineTo(NET_X - nw/2 + c*(nw/cols), NET_TOP + nh);
-        ctx.stroke();
+        ctx.lineTo(NET_X - nw/2 + c*(nw/cols), NET_TOP + nh); ctx.stroke();
       }
       for (let r = 0; r <= rows; r++) {
         ctx.beginPath();
         ctx.moveTo(NET_X - nw/2, NET_TOP + r*(nh/rows));
-        ctx.lineTo(NET_X + nw/2, NET_TOP + r*(nh/rows));
-        ctx.stroke();
+        ctx.lineTo(NET_X + nw/2, NET_TOP + r*(nh/rows)); ctx.stroke();
       }
-      ctx.fillStyle = '#cc0000';
-      ctx.fillRect(NET_X - nw/2, NET_TOP - 4, nw, 8);
+      ctx.fillStyle = '#cc0000'; ctx.fillRect(NET_X - nw/2, NET_TOP - 4, nw, 8);
     }
 
     function drawBall(ball) {
-      ctx.save();
-      ctx.translate(ball.x, ball.y);
-      ctx.rotate(ball.angle);
+      ctx.save(); ctx.translate(ball.x, ball.y); ctx.rotate(ball.angle);
       ctx.fillStyle = 'rgba(0,0,0,0.3)';
-      ctx.beginPath();
-      ctx.ellipse(0, GROUND - ball.y + 4, BALL_RADIUS * 0.8, 6, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
-      const bGrd = ctx.createRadialGradient(-5, -5, 2, 0, 0, BALL_RADIUS);
-      bGrd.addColorStop(0, '#ffee88');
-      bGrd.addColorStop(0.5, '#ff6600');
-      bGrd.addColorStop(1, '#cc2200');
-      ctx.fillStyle = bGrd;
-      ctx.fill();
-      ctx.strokeStyle = '#ffd700';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(-BALL_RADIUS, 0); ctx.lineTo(BALL_RADIUS, 0); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(0, -BALL_RADIUS); ctx.lineTo(0, BALL_RADIUS); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, GROUND-ball.y+4, BALL_RADIUS*0.8, 6, 0, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI*2);
+      const bGrd = ctx.createRadialGradient(-5,-5,2,0,0,BALL_RADIUS);
+      bGrd.addColorStop(0,'#ffee88'); bGrd.addColorStop(0.5,'#ff6600'); bGrd.addColorStop(1,'#cc2200');
+      ctx.fillStyle = bGrd; ctx.fill();
+      ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-BALL_RADIUS,0); ctx.lineTo(BALL_RADIUS,0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,-BALL_RADIUS); ctx.lineTo(0,BALL_RADIUS); ctx.stroke();
       drawStar(ctx, 0, 0, 5, 6, 3, '#ffd700');
       ctx.restore();
     }
 
     function drawStar(ctx, cx, cy, spikes, outerR, innerR, color) {
-      ctx.save();
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      let rot = (Math.PI / 2) * 3;
-      const step = Math.PI / spikes;
-      ctx.moveTo(cx, cy - outerR);
+      ctx.save(); ctx.fillStyle = color; ctx.beginPath();
+      let rot = (Math.PI/2)*3;
+      const step = Math.PI/spikes;
+      ctx.moveTo(cx, cy-outerR);
       for (let i = 0; i < spikes; i++) {
-        ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR); rot += step;
-        ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR); rot += step;
+        ctx.lineTo(cx+Math.cos(rot)*outerR, cy+Math.sin(rot)*outerR); rot+=step;
+        ctx.lineTo(cx+Math.cos(rot)*innerR, cy+Math.sin(rot)*innerR); rot+=step;
       }
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
+      ctx.closePath(); ctx.fill(); ctx.restore();
     }
 
     function drawPlayer(p, idx) {
@@ -443,116 +534,96 @@
         { body: '#cc0000', hat: '#8B0000', detail: '#ffd700' },
         { body: '#0044cc', hat: '#002288', detail: '#ff6600' },
       ];
-      const c = colors[idx];
-      const dir = p.face;
-      ctx.save();
-      ctx.translate(p.x, p.y);
-
+      const c = colors[idx], dir = p.face;
+      ctx.save(); ctx.translate(p.x, p.y);
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
-      ctx.beginPath(); ctx.ellipse(0, 2, PLAYER_R * 0.8, 7, 0, 0, Math.PI * 2); ctx.fill();
-
+      ctx.beginPath(); ctx.ellipse(0,2,PLAYER_R*0.8,7,0,0,Math.PI*2); ctx.fill();
       ctx.fillStyle = c.body;
-      ctx.beginPath(); ctx.ellipse(0, -PLAYER_R * 0.5, PLAYER_R * 0.7, PLAYER_R * 0.8, 0, 0, Math.PI * 2); ctx.fill();
-
+      ctx.beginPath(); ctx.ellipse(0,-PLAYER_R*0.5,PLAYER_R*0.7,PLAYER_R*0.8,0,0,Math.PI*2); ctx.fill();
       ctx.fillStyle = c.detail;
-      for (let i = -1; i <= 1; i++) {
-        ctx.beginPath(); ctx.arc(i * 12, -PLAYER_R * 0.4, 4, 0, Math.PI * 2); ctx.fill();
-      }
-
-      ctx.fillStyle = '#f5c9a0';
-      ctx.beginPath(); ctx.arc(0, -PLAYER_R * 1.45, PLAYER_R * 0.55, 0, Math.PI * 2); ctx.fill();
-
-      ctx.fillStyle = '#ff2222';
-      ctx.beginPath(); ctx.arc(dir * 5, -PLAYER_R * 1.4, 6, 0, Math.PI * 2); ctx.fill();
-
-      ctx.fillStyle = '#222';
-      ctx.beginPath(); ctx.arc(dir * 8 - dir * 14, -PLAYER_R * 1.55, 3, 0, Math.PI * 2); ctx.fill();
-      ctx.arc(dir * 8, -PLAYER_R * 1.55, 3, 0, Math.PI * 2); ctx.fill();
-
-      ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(dir * 8 - dir * 14 + 1, -PLAYER_R * 1.58, 1.2, 0, Math.PI * 2); ctx.fill();
-      ctx.arc(dir * 8 + 1, -PLAYER_R * 1.58, 1.2, 0, Math.PI * 2); ctx.fill();
-
-      ctx.fillStyle = c.hat;
-      ctx.fillRect(-14, -PLAYER_R * 2.15, 28, 22);
-      ctx.fillRect(-18, -PLAYER_R * 1.95, 36, 6);
-      ctx.fillStyle = c.detail;
-      ctx.fillRect(-14, -PLAYER_R * 2.0, 28, 5);
-
-      ctx.strokeStyle = c.body; ctx.lineWidth = 8; ctx.lineCap = 'round';
-      ctx.beginPath(); ctx.moveTo(dir * 18, -PLAYER_R * 0.6); ctx.lineTo(dir * 30, -PLAYER_R * 1.2); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(-dir * 18, -PLAYER_R * 0.6); ctx.lineTo(-dir * 28, -PLAYER_R * 0.1); ctx.stroke();
-
-      ctx.strokeStyle = c.body; ctx.lineWidth = 10;
-      ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(-14, 20); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(10, 0); ctx.lineTo(14, 20); ctx.stroke();
-
-      ctx.fillStyle = '#222';
-      ctx.beginPath(); ctx.ellipse(-14, 22, 16, 7, -0.2, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(14, 22, 16, 7, 0.2, 0, Math.PI * 2); ctx.fill();
-
+      for (let i=-1;i<=1;i++){ctx.beginPath();ctx.arc(i*12,-PLAYER_R*0.4,4,0,Math.PI*2);ctx.fill();}
+      ctx.fillStyle='#f5c9a0';
+      ctx.beginPath();ctx.arc(0,-PLAYER_R*1.45,PLAYER_R*0.55,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#ff2222';
+      ctx.beginPath();ctx.arc(dir*5,-PLAYER_R*1.4,6,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#222';
+      ctx.beginPath();ctx.arc(dir*8-dir*14,-PLAYER_R*1.55,3,0,Math.PI*2);ctx.fill();
+      ctx.arc(dir*8,-PLAYER_R*1.55,3,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#fff';
+      ctx.beginPath();ctx.arc(dir*8-dir*14+1,-PLAYER_R*1.58,1.2,0,Math.PI*2);ctx.fill();
+      ctx.arc(dir*8+1,-PLAYER_R*1.58,1.2,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=c.hat;
+      ctx.fillRect(-14,-PLAYER_R*2.15,28,22);ctx.fillRect(-18,-PLAYER_R*1.95,36,6);
+      ctx.fillStyle=c.detail;ctx.fillRect(-14,-PLAYER_R*2.0,28,5);
+      ctx.strokeStyle=c.body;ctx.lineWidth=8;ctx.lineCap='round';
+      ctx.beginPath();ctx.moveTo(dir*18,-PLAYER_R*0.6);ctx.lineTo(dir*30,-PLAYER_R*1.2);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(-dir*18,-PLAYER_R*0.6);ctx.lineTo(-dir*28,-PLAYER_R*0.1);ctx.stroke();
+      ctx.strokeStyle=c.body;ctx.lineWidth=10;
+      ctx.beginPath();ctx.moveTo(-10,0);ctx.lineTo(-14,20);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(10,0);ctx.lineTo(14,20);ctx.stroke();
+      ctx.fillStyle='#222';
+      ctx.beginPath();ctx.ellipse(-14,22,16,7,-0.2,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.ellipse(14,22,16,7,0.2,0,Math.PI*2);ctx.fill();
       ctx.restore();
     }
 
     function drawScore() {
       ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.5)';
-      ctx.roundRect(W/2 - 100, 35, 200, 50, 10); ctx.fill();
-      ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2;
-      ctx.roundRect(W/2 - 100, 35, 200, 50, 10); ctx.stroke();
-      ctx.font = 'bold 28px Georgia'; ctx.textAlign = 'center';
-      ctx.fillStyle = '#cc0000'; ctx.fillText(state.score[0], W/2 - 40, 68);
-      ctx.fillStyle = '#aaa';    ctx.fillText('-', W/2, 68);
-      ctx.fillStyle = '#0044cc'; ctx.fillText(state.score[1], W/2 + 40, 68);
-      ctx.font = '12px Georgia'; ctx.fillStyle = '#ffcc88';
-      ctx.fillText('P1', W/2 - 40, 42);
-      ctx.fillText('P2', W/2 + 40, 42);
+      ctx.fillStyle='rgba(0,0,0,0.5)';ctx.roundRect(W/2-100,35,200,50,10);ctx.fill();
+      ctx.strokeStyle='#ffd700';ctx.lineWidth=2;ctx.roundRect(W/2-100,35,200,50,10);ctx.stroke();
+      ctx.font='bold 28px Georgia';ctx.textAlign='center';
+      ctx.fillStyle='#cc0000';ctx.fillText(state.score[0],W/2-40,68);
+      ctx.fillStyle='#aaa';ctx.fillText('-',W/2,68);
+      ctx.fillStyle='#0044cc';ctx.fillText(state.score[1],W/2+40,68);
+      ctx.font='12px Georgia';ctx.fillStyle='#ffcc88';
+      ctx.fillText('P1',W/2-40,42);
+      ctx.fillText(gameMode==='1p'?'🤖':'P2',W/2+40,42);
       ctx.restore();
     }
 
     function drawWinScreen() {
       ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(0, 0, W, H);
-      ctx.textAlign = 'center';
-      ctx.font = 'bold 52px Georgia';
-      ctx.fillStyle = '#ffd700';
-      ctx.shadowColor = '#ff6600'; ctx.shadowBlur = 20;
-      ctx.fillText(state.winner === 0 ? '🎪 Speler 1 Wint! 🎪' : '🎪 Speler 2 Wint! 🎪', W/2, H/2 - 20);
-      ctx.font = '22px Georgia'; ctx.fillStyle = '#ffcc88'; ctx.shadowBlur = 0;
-      ctx.fillText('Tik of druk ENTER voor nieuw spel', W/2, H/2 + 30);
+      ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';ctx.font='bold 52px Georgia';
+      ctx.fillStyle='#ffd700';ctx.shadowColor='#ff6600';ctx.shadowBlur=20;
+      const who = state.winner===0
+        ? '🎪 Speler 1 Wint!'
+        : (gameMode==='1p' ? '🤖 Computer Wint!' : '🎪 Speler 2 Wint!');
+      ctx.fillText(who, W/2, H/2-20);
+      ctx.font='20px Georgia';ctx.fillStyle='#ffcc88';ctx.shadowBlur=0;
+      ctx.fillText('Tik of ENTER voor menu', W/2, H/2+30);
       ctx.restore();
     }
 
     function drawConfetti() {
-      for (const p of confetti) {
-        ctx.save();
-        ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-        ctx.fillStyle = p.color;
-        ctx.fillRect(-p.size/2, -p.size/4, p.size, p.size/2);
+      for (const p of confetti){
+        ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.rot);
+        ctx.fillStyle=p.color;ctx.fillRect(-p.size/2,-p.size/4,p.size,p.size/2);
         ctx.restore();
       }
     }
 
-    // Tap to restart on win screen
-    canvas.addEventListener('touchstart', e => {
-      if (state.winner !== null) { e.preventDefault(); resetGame(); }
-    }, { passive: false });
-
-    // ── Loop ──────────────────────────────────────────────────────
+    // ── Loop ─────────────────────────────────────────────────────
     function loop() {
       updatePhysics();
       updateConfetti();
-      drawBackground();
-      drawTouchIndicator(0);
-      drawTouchIndicator(1);
-      drawNet();
-      drawBall(state.ball);
-      drawPlayer(state.players[0], 0);
-      drawPlayer(state.players[1], 1);
-      drawScore();
-      drawConfetti();
-      if (state.winner !== null) drawWinScreen();
+
+      if (gameMode === 'menu') {
+        drawMenu();
+      } else {
+        drawBackground();
+        drawTouchIndicator(0);
+        drawTouchIndicator(1);
+        drawNet();
+        drawBall(state.ball);
+        drawPlayer(state.players[0], 0);
+        drawPlayer(state.players[1], 1);
+        if (gameMode === '1p') drawAIIndicator();
+        drawScore();
+        drawConfetti();
+        if (state.winner !== null) drawWinScreen();
+      }
+
       requestAnimationFrame(loop);
     }
 
