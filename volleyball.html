@@ -35,19 +35,10 @@
       height: auto;
       touch-action: none;
     }
-    #controls {
-      color: #ffcc88;
-      font-size: clamp(0.6rem, 2.5vw, 0.8rem);
+    #hint {
+      color: #ffcc8888;
+      font-size: clamp(0.55rem, 2vw, 0.75rem);
       margin-top: 6px;
-      text-align: center;
-      opacity: 0.8;
-      padding: 0 8px;
-    }
-    #controls span { color: #ffd700; }
-    #touchHint {
-      color: #ffcc8899;
-      font-size: clamp(0.55rem, 2vw, 0.72rem);
-      margin-top: 4px;
       text-align: center;
     }
   </style>
@@ -57,116 +48,97 @@
   <div id="canvasWrapper">
     <canvas id="gameCanvas" width="800" height="450"></canvas>
   </div>
-  <div id="controls">
-    <span>Toetsenbord P1:</span> A/D + W &nbsp;|&nbsp;
-    <span>P2:</span> ←/→ + ↑ &nbsp;|&nbsp;
-    <span>ENTER</span> menu
-  </div>
-  <div id="touchHint">📱 Sleep je helft · loslaten = springen</div>
+  <div id="hint">📱 Sleep om te bewegen · loslaten = springen · tik om te serven</div>
 
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
     const W = canvas.width, H = canvas.height;
-    const GROUND = H - 60;
-    const NET_X = W / 2;
-    const NET_H = 110;
-    const NET_TOP = GROUND - NET_H;
-    const GRAVITY = 0.45;
-    const PLAYER_SPEED = 4.5;
-    const JUMP_FORCE = -11;
-    const BALL_RADIUS = 18;
-    const PLAYER_R = 28;
-    const WIN_SCORE = 7;
+    const GROUND   = H - 60;
+    const NET_X    = W / 2;
+    const NET_H    = 110;
+    const NET_TOP  = GROUND - NET_H;
+    const GRAVITY  = 0.45;
+    const P_SPEED  = 4.5;
+    const JUMP_V   = -11;
+    const BALL_R   = 18;
+    const P_R      = 28;
+    const WIN      = 7;
 
     let gameMode = 'menu';
-    let confetti = [];
 
-    const ai = {
-      frameCounter: 0,
-      targetX: W * 0.8,
-      wantsJump: false,
-      reactionDelay: 6,
+    const state = {
+      score:   [0, 0],
+      winner:  null,
+      phase:   'serving',
+      server:  0,
+      ball:    null,
+      players: [{}, {}],
     };
 
-    function updateAI() {
-      const b = state.ball;
-      const p = state.players[1];
-      ai.frameCounter++;
-      if (ai.frameCounter < ai.reactionDelay) return;
-      ai.frameCounter = 0;
+    let confetti = [];
+    let aiTimer  = 0;
 
-      let bx = b.x, by = b.y, bvx = b.vx, bvy = b.vy;
-      for (let i = 0; i < 40; i++) {
-        bvy += GRAVITY * 0.85;
-        bx += bvx; by += bvy;
-        if (bx < BALL_RADIUS)     { bx = BALL_RADIUS;     bvx =  Math.abs(bvx); }
-        if (bx > W - BALL_RADIUS) { bx = W - BALL_RADIUS; bvx = -Math.abs(bvx); }
-        if (by + BALL_RADIUS >= GROUND) break;
-        if (by + BALL_RADIUS > NET_TOP) {
-          const nl = NET_X - 30, nr = NET_X + 30;
-          if (bx + BALL_RADIUS > nl && bx - BALL_RADIUS < nr) {
-            if (bx < NET_X) bvx = -Math.abs(bvx);
-            else            bvx =  Math.abs(bvx);
-          }
-        }
-      }
-
-      if (b.x > NET_X || b.vx > 1) {
-        ai.targetX = Math.max(NET_X + 40, Math.min(W - PLAYER_R, bx));
-      } else {
-        ai.targetX = W * 0.75;
-      }
-
-      const distToBall = Math.hypot(b.x - p.x, b.y - (p.y - PLAYER_R));
-      ai.wantsJump = b.x > NET_X && b.vy > -2 && b.y > GROUND - 260 && b.y < GROUND - 20 && distToBall < 160;
+    function resetGame() {
+      state.score  = [0, 0];
+      state.winner = null;
+      confetti     = [];
+      beginServe(0);
     }
 
-    function applyAI(p) {
-      const dx = ai.targetX - p.x;
-      if (dx < -4) { p.x -= PLAYER_SPEED * 0.9; p.face = -1; }
-      else if (dx > 4) { p.x += PLAYER_SPEED * 0.9; p.face = 1; }
-      if (ai.wantsJump && p.onGround) {
-        p.vy = JUMP_FORCE; p.onGround = false; ai.wantsJump = false;
-      }
+    function beginServe(serverIdx) {
+      state.phase  = 'serving';
+      state.server = serverIdx;
+      aiTimer      = 80;
+      state.players[0] = { x: W * 0.2, y: GROUND, vy: 0, onGround: true, face: 1 };
+      state.players[1] = { x: W * 0.8, y: GROUND, vy: 0, onGround: true, face: -1 };
+      const sx = serverIdx === 0 ? W * 0.25 : W * 0.75;
+      state.ball = { x: sx, y: GROUND - 160, vx: 0, vy: 0, angle: 0 };
     }
 
-    const touches = [
-      { active: false, startX: 0, currentX: 0, lastX: 0, id: -1, shouldJump: false },
-      { active: false, startX: 0, currentX: 0, lastX: 0, id: -1, shouldJump: false },
+    function launchBall(serverIdx) {
+      if (state.phase !== 'serving' || state.server !== serverIdx) return;
+      state.phase   = 'playing';
+      state.ball.vx = serverIdx === 0 ? 4 : -4;
+      state.ball.vy = -9;
+    }
+
+    // ── Touch ─────────────────────────────────────────────────────
+    const touch = [
+      { active: false, id: -1, x: 0, released: false },
+      { active: false, id: -1, x: 0, released: false },
     ];
 
-    function canvasX(clientX) {
-      const rect = canvas.getBoundingClientRect();
-      return (clientX - rect.left) * (W / rect.width);
+    function cX(clientX) {
+      const r = canvas.getBoundingClientRect();
+      return (clientX - r.left) * (W / r.width);
     }
-    function canvasY(clientY) {
-      const rect = canvas.getBoundingClientRect();
-      return (clientY - rect.top) * (H / rect.height);
+    function cY(clientY) {
+      const r = canvas.getBoundingClientRect();
+      return (clientY - r.top) * (H / r.height);
     }
 
     canvas.addEventListener('touchstart', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
-        const cx = canvasX(t.clientX), cy = canvasY(t.clientY);
-        if (gameMode === 'menu') { handleMenuTap(cx, cy); continue; }
-        if (state.winner !== null) { resetGame(); continue; }
-        const idx = cx < W / 2 ? 0 : 1;
+        const x = cX(t.clientX), y = cY(t.clientY);
+        if (gameMode === 'menu')            { handleMenuTap(x, y); continue; }
+        if (state.winner !== null)          { resetGame();          continue; }
+        const idx = x < W / 2 ? 0 : 1;
         if (gameMode === '1p' && idx === 1) continue;
-        if (!touches[idx].active) {
-          touches[idx] = { active: true, startX: cx, currentX: cx, lastX: cx, id: t.identifier, shouldJump: false };
+        if (!touch[idx].active) {
+          touch[idx] = { active: true, id: t.identifier, x, released: false };
         }
+        if (state.phase === 'serving') launchBall(idx);
       }
     }, { passive: false });
 
     canvas.addEventListener('touchmove', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
-        for (const td of touches) {
-          if (td.active && td.id === t.identifier) {
-            td.lastX = td.currentX; td.currentX = canvasX(t.clientX);
-          }
+        for (const td of touch) {
+          if (td.active && td.id === t.identifier) td.x = cX(t.clientX);
         }
       }
     }, { passive: false });
@@ -174,166 +146,180 @@
     canvas.addEventListener('touchend', e => {
       e.preventDefault();
       for (const t of e.changedTouches) {
-        for (const td of touches) {
-          if (td.active && td.id === t.identifier) { td.active = false; td.shouldJump = true; }
+        for (const td of touch) {
+          if (td.active && td.id === t.identifier) {
+            td.active   = false;
+            td.released = true;
+          }
         }
       }
     }, { passive: false });
 
     canvas.addEventListener('touchcancel', e => {
       for (const t of e.changedTouches) {
-        for (const td of touches) {
+        for (const td of touch) {
           if (td.active && td.id === t.identifier) td.active = false;
         }
       }
     });
 
+    // ── Keyboard ──────────────────────────────────────────────────
     const keys = {};
     document.addEventListener('keydown', e => {
+      if (keys[e.key]) return;
       keys[e.key] = true;
       if (e.key === 'Enter') { gameMode = 'menu'; return; }
       if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+      if (state.phase === 'serving') {
+        if (e.key === 'w' || e.key === 'W') launchBall(0);
+        if (e.key === 'ArrowUp')            launchBall(1);
+      }
     });
     document.addEventListener('keyup', e => { keys[e.key] = false; });
 
     canvas.addEventListener('click', e => {
       if (gameMode !== 'menu') return;
-      const rect = canvas.getBoundingClientRect();
-      handleMenuTap(
-        (e.clientX - rect.left) * (W / rect.width),
-        (e.clientY - rect.top)  * (H / rect.height)
-      );
+      const r = canvas.getBoundingClientRect();
+      handleMenuTap((e.clientX-r.left)*(W/r.width), (e.clientY-r.top)*(H/r.height));
     });
 
     const BTN = {
       oneP: { x: W/2-160, y: H/2-10, w: 140, h: 54 },
       twoP: { x: W/2+20,  y: H/2-10, w: 140, h: 54 },
     };
-
-    function handleMenuTap(cx, cy) {
-      if (inBtn(BTN.oneP, cx, cy)) { gameMode = '1p'; resetGame(); }
-      if (inBtn(BTN.twoP, cx, cy)) { gameMode = '2p'; resetGame(); }
-    }
-    function inBtn(b, cx, cy) {
-      return cx>=b.x && cx<=b.x+b.w && cy>=b.y && cy<=b.y+b.h;
+    function inBtn(b,x,y){return x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h;}
+    function handleMenuTap(x,y){
+      if(inBtn(BTN.oneP,x,y)){gameMode='1p';resetGame();}
+      if(inBtn(BTN.twoP,x,y)){gameMode='2p';resetGame();}
     }
 
-    function drawMenu() {
-      drawBackground();
-      ctx.save();
-      ctx.fillStyle = 'rgba(0,0,0,0.65)';
-      ctx.roundRect(W/2-220, H/2-130, 440, 220, 16); ctx.fill();
-      ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2;
-      ctx.roundRect(W/2-220, H/2-130, 440, 220, 16); ctx.stroke();
-      ctx.textAlign = 'center';
-      ctx.font = 'bold 30px Georgia'; ctx.fillStyle = '#ffd700';
-      ctx.shadowColor = '#ff6600'; ctx.shadowBlur = 12;
-      ctx.fillText('Kies een modus', W/2, H/2-55);
-      ctx.shadowBlur = 0;
-      drawMenuBtn(BTN.oneP, '🤖 1 Speler',  '#cc0000', '#8B0000');
-      drawMenuBtn(BTN.twoP, '👥 2 Spelers', '#0044cc', '#002288');
-      ctx.font = '13px Georgia'; ctx.fillStyle = '#ffcc8888';
-      ctx.fillText('Tik of klik om te kiezen', W/2, H/2+90);
-      ctx.restore();
-    }
+    // ── AI ────────────────────────────────────────────────────────
+    const ai = { targetX: W*0.8, wantsJump: false, frameCount: 0 };
 
-    function drawMenuBtn(b, label, color, shadow) {
-      ctx.save();
-      ctx.fillStyle = color; ctx.shadowColor = shadow; ctx.shadowBlur = 10;
-      ctx.roundRect(b.x, b.y, b.w, b.h, 10); ctx.fill();
-      ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 2; ctx.shadowBlur = 0;
-      ctx.roundRect(b.x, b.y, b.w, b.h, 10); ctx.stroke();
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 17px Georgia'; ctx.textAlign = 'center';
-      ctx.fillText(label, b.x + b.w/2, b.y + b.h/2 + 6);
-      ctx.restore();
-    }
+    function updateAI() {
+      const b = state.ball, p = state.players[1];
+      if (state.phase === 'serving' && state.server === 1) {
+        if (--aiTimer <= 0) launchBall(1);
+        return;
+      }
+      if (state.phase !== 'playing') return;
+      if (++ai.frameCount < 5) return;
+      ai.frameCount = 0;
 
-    const state = { score: [0,0], winner: null, ball: null, players: [{},{}] };
-
-    function resetGame() {
-      state.score = [0,0]; state.winner = null; confetti = []; resetRound(0);
-    }
-
-    function resetRound(lastScorer) {
-      state.ball = {
-        x: lastScorer===0 ? W*0.25 : W*0.75,
-        y: GROUND-200, vx: lastScorer===0 ? 3 : -3, vy: -4, angle: 0,
-      };
-      state.players[0] = { x: W*0.2, y: GROUND, vy: 0, onGround: true, face: 1 };
-      state.players[1] = { x: W*0.8, y: GROUND, vy: 0, onGround: true, face: -1 };
-      touches[0].shouldJump = false; touches[1].shouldJump = false;
-      ai.wantsJump = false; ai.frameCounter = 0; ai.targetX = W*0.8;
-    }
-
-    resetGame();
-
-    function updatePhysics() {
-      if (state.winner !== null || gameMode === 'menu') return;
-      const b = state.ball;
-      if (gameMode === '1p') updateAI();
-
-      function movePlayer(p, idx, left, right, jump) {
-        if (gameMode === '1p' && idx === 1) { applyAI(p); }
-        else {
-          let ml=!!keys[left], mr=!!keys[right], mj=!!(keys[jump]&&p.onGround);
-          const td = touches[idx];
-          if (td.active) {
-            const dx = td.currentX - td.lastX;
-            if (dx<-0.5) ml=true; if (dx>0.5) mr=true;
-            td.lastX = td.currentX;
-          }
-          if (td.shouldJump && p.onGround) { mj=true; td.shouldJump=false; }
-          if (ml){p.x-=PLAYER_SPEED;p.face=-1;} if(mr){p.x+=PLAYER_SPEED;p.face=1;}
-          if (mj){p.vy=JUMP_FORCE;p.onGround=false;}
+      let bx=b.x,by=b.y,bvx=b.vx,bvy=b.vy;
+      for(let i=0;i<50;i++){
+        bvy+=GRAVITY*0.85;bx+=bvx;by+=bvy;
+        if(bx<BALL_R){bx=BALL_R;bvx=Math.abs(bvx);}
+        if(bx>W-BALL_R){bx=W-BALL_R;bvx=-Math.abs(bvx);}
+        if(by+BALL_R>=GROUND)break;
+        if(by+BALL_R>NET_TOP){
+          const nl=NET_X-30,nr=NET_X+30;
+          if(bx+BALL_R>nl&&bx-BALL_R<nr)bvx=bx<NET_X?-Math.abs(bvx):Math.abs(bvx);
         }
-        p.vy+=GRAVITY; p.y+=p.vy;
-        if(p.y>=GROUND){p.y=GROUND;p.vy=0;p.onGround=true;}
+      }
+      ai.targetX=(b.x>NET_X||b.vx>0)?Math.max(NET_X+40,Math.min(W-P_R,bx)):W*0.75;
+      const dist=Math.hypot(b.x-p.x,b.y-(p.y-P_R));
+      ai.wantsJump=b.x>NET_X&&b.vy>-2&&b.y>GROUND-260&&b.y<GROUND-20&&dist<160;
+    }
+
+    function applyAI(p){
+      const dx=ai.targetX-p.x;
+      if(dx<-4){p.x-=P_SPEED*0.9;p.face=-1;}
+      else if(dx>4){p.x+=P_SPEED*0.9;p.face=1;}
+      if(ai.wantsJump&&p.onGround){p.vy=JUMP_V;p.onGround=false;ai.wantsJump=false;}
+    }
+
+    // ── Physics ───────────────────────────────────────────────────
+    function updatePhysics(){
+      if(gameMode==='menu'||state.winner!==null)return;
+      if(gameMode==='1p')updateAI();
+
+      if(state.phase==='serving'){
+        state.ball.x=state.server===0?W*0.25:W*0.75;
+        state.ball.y=GROUND-160+Math.sin(Date.now()/350)*6;
+        state.ball.angle+=0.015;
+        movePlayers(true);
+        return;
       }
 
-      movePlayer(state.players[0],0,'a','d','w');
-      movePlayer(state.players[1],1,'ArrowLeft','ArrowRight','ArrowUp');
-      state.players[0].x=Math.max(PLAYER_R,Math.min(NET_X-40,state.players[0].x));
-      state.players[1].x=Math.max(NET_X+40,Math.min(W-PLAYER_R,state.players[1].x));
+      movePlayers(false);
 
+      const b=state.ball;
       b.vy+=GRAVITY*0.85;b.x+=b.vx;b.y+=b.vy;b.angle+=b.vx*0.05;
-      if(b.x-BALL_RADIUS<0){b.x=BALL_RADIUS;b.vx=Math.abs(b.vx)*0.8;}
-      if(b.x+BALL_RADIUS>W){b.x=W-BALL_RADIUS;b.vx=-Math.abs(b.vx)*0.8;}
-      if(b.y-BALL_RADIUS<30){b.y=30+BALL_RADIUS;b.vy=Math.abs(b.vy)*0.7;}
+      if(b.x-BALL_R<0){b.x=BALL_R;b.vx=Math.abs(b.vx)*0.8;}
+      if(b.x+BALL_R>W){b.x=W-BALL_R;b.vx=-Math.abs(b.vx)*0.8;}
+      if(b.y-BALL_R<30){b.y=30+BALL_R;b.vy=Math.abs(b.vy)*0.7;}
 
-      if(b.y+BALL_RADIUS>NET_TOP&&b.y-BALL_RADIUS<GROUND){
+      if(b.y+BALL_R>NET_TOP&&b.y-BALL_R<GROUND){
         const nl=NET_X-30,nr=NET_X+30;
-        if(b.x+BALL_RADIUS>nl&&b.x-BALL_RADIUS<nr){
-          if(b.x<NET_X){b.x=nl-BALL_RADIUS;b.vx=-Math.abs(b.vx);}
-          else{b.x=nr+BALL_RADIUS;b.vx=Math.abs(b.vx);}
+        if(b.x+BALL_R>nl&&b.x-BALL_R<nr){
+          if(b.x<NET_X){b.x=nl-BALL_R;b.vx=-Math.abs(b.vx);}
+          else{b.x=nr+BALL_R;b.vx=Math.abs(b.vx);}
         }
       }
 
-      if(b.y+BALL_RADIUS>=GROUND){
+      if(b.y+BALL_R>=GROUND){
         const scorer=b.x<NET_X?1:0;
         state.score[scorer]++;
-        if(state.score[scorer]>=WIN_SCORE){state.winner=scorer;spawnConfetti();}
-        else resetRound(scorer);
+        if(state.score[scorer]>=WIN){state.winner=scorer;spawnConfetti();}
+        else beginServe(scorer);
         return;
       }
 
       for(let i=0;i<2;i++){
         const p=state.players[i];
-        const px=p.x,py=p.y-PLAYER_R*0.7;
+        const px=p.x,py=p.y-P_R*0.7;
         const dx=b.x-px,dy=b.y-py;
         const dist=Math.sqrt(dx*dx+dy*dy);
-        const minDist=BALL_RADIUS+PLAYER_R*0.9;
-        if(dist<minDist&&dist>0){
+        const minD=BALL_R+P_R*0.9;
+        if(dist<minD&&dist>0){
           const nx=dx/dist,ny=dy/dist;
-          b.x=px+nx*minDist;b.y=py+ny*minDist;
+          b.x=px+nx*minD;b.y=py+ny*minD;
           const dot=b.vx*nx+b.vy*ny;
-          const boost=i===0
-            ?(keys['d']||(touches[0].active&&touches[0].currentX>touches[0].lastX)?2:0)
-            :(keys['ArrowLeft']||(touches[1].active&&touches[1].currentX<touches[1].lastX)?-2:0);
-          b.vx=(b.vx-2*dot*nx)*0.9+boost;
+          b.vx=(b.vx-2*dot*nx)*0.9;
           b.vy=(b.vy-2*dot*ny)*0.9-3;
           b.vx=Math.max(-14,Math.min(14,b.vx));
           b.vy=Math.max(-14,Math.min(14,b.vy));
         }
+      }
+    }
+
+    function movePlayers(servingPhase){
+      for(let idx=0;idx<2;idx++){
+        const p=state.players[idx];
+        const td=touch[idx];
+        const isAI=gameMode==='1p'&&idx===1;
+
+        if(isAI){
+          if(!servingPhase)applyAI(p);
+        }else{
+          // Touch: player follows finger directly
+          if(td.active){
+            const minX=idx===0?P_R:NET_X+40;
+            const maxX=idx===0?NET_X-40:W-P_R;
+            const newX=Math.max(minX,Math.min(maxX,td.x));
+            if(newX>p.x+1)p.face=1;
+            else if(newX<p.x-1)p.face=-1;
+            p.x=newX;
+          }
+          if(td.released){
+            td.released=false;
+            if(p.onGround&&!servingPhase){p.vy=JUMP_V;p.onGround=false;}
+          }
+          // Keyboard (only when not using touch)
+          const[left,right,jump]=idx===0?['a','d','w']:['ArrowLeft','ArrowRight','ArrowUp'];
+          if(!td.active){
+            if(keys[left]){p.x-=P_SPEED;p.face=-1;}
+            if(keys[right]){p.x+=P_SPEED;p.face=1;}
+          }
+          if(keys[jump]&&p.onGround&&!servingPhase){p.vy=JUMP_V;p.onGround=false;}
+        }
+
+        p.vy+=GRAVITY;p.y+=p.vy;
+        if(p.y>=GROUND){p.y=GROUND;p.vy=0;p.onGround=true;}
+        const minX=idx===0?P_R:NET_X+40;
+        const maxX=idx===0?NET_X-40:W-P_R;
+        p.x=Math.max(minX,Math.min(maxX,p.x));
       }
     }
 
@@ -347,12 +333,12 @@
         });
       }
     }
-
     function updateConfetti(){
       for(const p of confetti){p.x+=p.vx;p.y+=p.vy;p.rot+=p.rotV;if(p.y>H+20)p.y=-10;}
     }
 
-    function drawBackground(){
+    // ── Drawing ───────────────────────────────────────────────────
+    function drawBg(){
       ctx.fillStyle='#1a0a2e';ctx.fillRect(0,0,W,H);
       const sc=['#cc0000','#ffffff','#ffd700'];
       for(let i=0;i<Math.ceil(W/50);i++){ctx.fillStyle=sc[i%sc.length];ctx.fillRect(i*50,0,50,30);}
@@ -364,62 +350,42 @@
       for(let i=0;i<8;i++){ctx.beginPath();ctx.moveTo(0,GROUND+i*8);ctx.lineTo(W,GROUND+i*8);ctx.stroke();}
       ctx.fillStyle='#ffffff88';
       for(let i=0;i<30;i++){ctx.beginPath();ctx.arc((i*137+50)%(W-20)+10,(i*97+40)%(GROUND-40)+10,1.5,0,Math.PI*2);ctx.fill();}
-      drawSpotlight(W*0.25,'#ffffff22');drawSpotlight(W*0.75,'#ffaa0022');
-      if(gameMode!=='menu'){
-        ctx.strokeStyle='#ffffff11';ctx.lineWidth=1;ctx.setLineDash([6,8]);
-        ctx.beginPath();ctx.moveTo(W/2,34);ctx.lineTo(W/2,GROUND);ctx.stroke();
-        ctx.setLineDash([]);
-      }
-    }
-
-    function drawSpotlight(cx,color){
-      const grd=ctx.createRadialGradient(cx,30,10,cx,GROUND,200);
-      grd.addColorStop(0,color);grd.addColorStop(1,'transparent');
-      ctx.fillStyle=grd;ctx.fillRect(cx-200,0,400,GROUND);
-    }
-
-    function drawTouchIndicator(idx){
-      if(gameMode==='1p'&&idx===1)return;
-      const td=touches[idx];if(!td.active)return;
-      const p=state.players[idx];
-      ctx.save();
-      ctx.strokeStyle=idx===0?'#cc000066':'#0044cc66';ctx.lineWidth=3;
-      ctx.beginPath();ctx.arc(p.x,GROUND+15,18,Math.PI,0);ctx.stroke();
-      const arrowX=Math.max(10,Math.min(W-10,p.x+Math.sign(td.currentX-td.startX)*28));
-      ctx.strokeStyle=idx===0?'#cc0000aa':'#0044ccaa';ctx.lineWidth=2;
-      ctx.beginPath();ctx.moveTo(p.x,GROUND+15);ctx.lineTo(arrowX,GROUND+15);ctx.stroke();
-      ctx.restore();
-    }
-
-    function drawAIIndicator(){
-      const p=state.players[1];
-      ctx.save();ctx.font='13px Georgia';ctx.textAlign='center';ctx.fillStyle='#ff660099';
-      ctx.fillText('🤖',p.x,p.y-PLAYER_R*2.6);ctx.restore();
+      [W*0.25,W*0.75].forEach((cx,i)=>{
+        const g=ctx.createRadialGradient(cx,30,10,cx,GROUND,200);
+        g.addColorStop(0,i===0?'#ffffff22':'#ffaa0022');g.addColorStop(1,'transparent');
+        ctx.fillStyle=g;ctx.fillRect(cx-200,0,400,GROUND);
+      });
+      ctx.strokeStyle='#ffffff11';ctx.lineWidth=1;ctx.setLineDash([6,8]);
+      ctx.beginPath();ctx.moveTo(W/2,34);ctx.lineTo(W/2,GROUND);ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     function drawNet(){
       ctx.fillStyle='#ffd700';ctx.fillRect(NET_X-5,NET_TOP-10,10,NET_H+10);
       ctx.strokeStyle='#ffffffcc';ctx.lineWidth=1.5;
-      const cols=8,rows=6,nw=60,nh=NET_H;
+      const nw=60,nh=NET_H,cols=8,rows=6;
       for(let c=0;c<=cols;c++){ctx.beginPath();ctx.moveTo(NET_X-nw/2+c*(nw/cols),NET_TOP);ctx.lineTo(NET_X-nw/2+c*(nw/cols),NET_TOP+nh);ctx.stroke();}
       for(let r=0;r<=rows;r++){ctx.beginPath();ctx.moveTo(NET_X-nw/2,NET_TOP+r*(nh/rows));ctx.lineTo(NET_X+nw/2,NET_TOP+r*(nh/rows));ctx.stroke();}
       ctx.fillStyle='#cc0000';ctx.fillRect(NET_X-nw/2,NET_TOP-4,nw,8);
     }
 
-    function drawBall(ball){
-      ctx.save();ctx.translate(ball.x,ball.y);ctx.rotate(ball.angle);
-      ctx.fillStyle='rgba(0,0,0,0.3)';ctx.beginPath();ctx.ellipse(0,GROUND-ball.y+4,BALL_RADIUS*0.8,6,0,0,Math.PI*2);ctx.fill();
-      ctx.beginPath();ctx.arc(0,0,BALL_RADIUS,0,Math.PI*2);
-      const bGrd=ctx.createRadialGradient(-5,-5,2,0,0,BALL_RADIUS);
-      bGrd.addColorStop(0,'#ffee88');bGrd.addColorStop(0.5,'#ff6600');bGrd.addColorStop(1,'#cc2200');
-      ctx.fillStyle=bGrd;ctx.fill();
+    function drawBall(){
+      const b=state.ball;
+      ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.angle);
+      ctx.fillStyle='rgba(0,0,0,0.3)';
+      ctx.beginPath();ctx.ellipse(0,GROUND-b.y+4,BALL_R*0.8,6,0,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(0,0,BALL_R,0,Math.PI*2);
+      const g=ctx.createRadialGradient(-5,-5,2,0,0,BALL_R);
+      g.addColorStop(0,'#ffee88');g.addColorStop(0.5,'#ff6600');g.addColorStop(1,'#cc2200');
+      ctx.fillStyle=g;ctx.fill();
       ctx.strokeStyle='#ffd700';ctx.lineWidth=2;
-      ctx.beginPath();ctx.moveTo(-BALL_RADIUS,0);ctx.lineTo(BALL_RADIUS,0);ctx.stroke();
-      ctx.beginPath();ctx.moveTo(0,-BALL_RADIUS);ctx.lineTo(0,BALL_RADIUS);ctx.stroke();
-      drawStar(ctx,0,0,5,6,3,'#ffd700');ctx.restore();
+      ctx.beginPath();ctx.moveTo(-BALL_R,0);ctx.lineTo(BALL_R,0);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(0,-BALL_R);ctx.lineTo(0,BALL_R);ctx.stroke();
+      drawStar(0,0,5,6,3,'#ffd700');
+      ctx.restore();
     }
 
-    function drawStar(ctx,cx,cy,spikes,outerR,innerR,color){
+    function drawStar(cx,cy,spikes,outerR,innerR,color){
       ctx.save();ctx.fillStyle=color;ctx.beginPath();
       let rot=(Math.PI/2)*3;const step=Math.PI/spikes;
       ctx.moveTo(cx,cy-outerR);
@@ -431,32 +397,42 @@
     }
 
     function drawPlayer(p,idx){
-      const colors=[{body:'#cc0000',hat:'#8B0000',detail:'#ffd700'},{body:'#0044cc',hat:'#002288',detail:'#ff6600'}];
-      const c=colors[idx],dir=p.face;
+      const C=[{body:'#cc0000',hat:'#8B0000',det:'#ffd700'},{body:'#0044cc',hat:'#002288',det:'#ff6600'}];
+      const c=C[idx],d=p.face;
       ctx.save();ctx.translate(p.x,p.y);
-      ctx.fillStyle='rgba(0,0,0,0.25)';ctx.beginPath();ctx.ellipse(0,2,PLAYER_R*0.8,7,0,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle=c.body;ctx.beginPath();ctx.ellipse(0,-PLAYER_R*0.5,PLAYER_R*0.7,PLAYER_R*0.8,0,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle=c.detail;
-      for(let i=-1;i<=1;i++){ctx.beginPath();ctx.arc(i*12,-PLAYER_R*0.4,4,0,Math.PI*2);ctx.fill();}
-      ctx.fillStyle='#f5c9a0';ctx.beginPath();ctx.arc(0,-PLAYER_R*1.45,PLAYER_R*0.55,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle='#ff2222';ctx.beginPath();ctx.arc(dir*5,-PLAYER_R*1.4,6,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='rgba(0,0,0,0.25)';ctx.beginPath();ctx.ellipse(0,2,P_R*0.8,7,0,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=c.body;ctx.beginPath();ctx.ellipse(0,-P_R*0.5,P_R*0.7,P_R*0.8,0,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=c.det;
+      for(let i=-1;i<=1;i++){ctx.beginPath();ctx.arc(i*12,-P_R*0.4,4,0,Math.PI*2);ctx.fill();}
+      ctx.fillStyle='#f5c9a0';ctx.beginPath();ctx.arc(0,-P_R*1.45,P_R*0.55,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle='#ff2222';ctx.beginPath();ctx.arc(d*5,-P_R*1.4,6,0,Math.PI*2);ctx.fill();
       ctx.fillStyle='#222';
-      ctx.beginPath();ctx.arc(dir*8-dir*14,-PLAYER_R*1.55,3,0,Math.PI*2);ctx.fill();
-      ctx.arc(dir*8,-PLAYER_R*1.55,3,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(d*8-d*14,-P_R*1.55,3,0,Math.PI*2);ctx.fill();
+      ctx.arc(d*8,-P_R*1.55,3,0,Math.PI*2);ctx.fill();
       ctx.fillStyle='#fff';
-      ctx.beginPath();ctx.arc(dir*8-dir*14+1,-PLAYER_R*1.58,1.2,0,Math.PI*2);ctx.fill();
-      ctx.arc(dir*8+1,-PLAYER_R*1.58,1.2,0,Math.PI*2);ctx.fill();
-      ctx.fillStyle=c.hat;ctx.fillRect(-14,-PLAYER_R*2.15,28,22);ctx.fillRect(-18,-PLAYER_R*1.95,36,6);
-      ctx.fillStyle=c.detail;ctx.fillRect(-14,-PLAYER_R*2.0,28,5);
+      ctx.beginPath();ctx.arc(d*8-d*14+1,-P_R*1.58,1.2,0,Math.PI*2);ctx.fill();
+      ctx.arc(d*8+1,-P_R*1.58,1.2,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=c.hat;ctx.fillRect(-14,-P_R*2.15,28,22);ctx.fillRect(-18,-P_R*1.95,36,6);
+      ctx.fillStyle=c.det;ctx.fillRect(-14,-P_R*2.0,28,5);
       ctx.strokeStyle=c.body;ctx.lineWidth=8;ctx.lineCap='round';
-      ctx.beginPath();ctx.moveTo(dir*18,-PLAYER_R*0.6);ctx.lineTo(dir*30,-PLAYER_R*1.2);ctx.stroke();
-      ctx.beginPath();ctx.moveTo(-dir*18,-PLAYER_R*0.6);ctx.lineTo(-dir*28,-PLAYER_R*0.1);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(d*18,-P_R*0.6);ctx.lineTo(d*30,-P_R*1.2);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(-d*18,-P_R*0.6);ctx.lineTo(-d*28,-P_R*0.1);ctx.stroke();
       ctx.strokeStyle=c.body;ctx.lineWidth=10;
       ctx.beginPath();ctx.moveTo(-10,0);ctx.lineTo(-14,20);ctx.stroke();
       ctx.beginPath();ctx.moveTo(10,0);ctx.lineTo(14,20);ctx.stroke();
       ctx.fillStyle='#222';
       ctx.beginPath();ctx.ellipse(-14,22,16,7,-0.2,0,Math.PI*2);ctx.fill();
       ctx.beginPath();ctx.ellipse(14,22,16,7,0.2,0,Math.PI*2);ctx.fill();
+      ctx.restore();
+    }
+
+    function drawServeHint(){
+      if(state.phase!=='serving')return;
+      if(gameMode==='1p'&&state.server===1)return;
+      ctx.save();
+      ctx.textAlign='center';ctx.font='bold 14px Georgia';
+      ctx.fillStyle='#ffd700cc';ctx.shadowColor='#ff6600';ctx.shadowBlur=8;
+      ctx.fillText('▶ tik om te serven',state.ball.x,state.ball.y-BALL_R-14);
       ctx.restore();
     }
 
@@ -474,12 +450,12 @@
       ctx.restore();
     }
 
-    function drawWinScreen(){
+    function drawWin(){
       ctx.save();
-      ctx.fillStyle='rgba(0,0,0,0.6)';ctx.fillRect(0,0,W,H);
-      ctx.textAlign='center';ctx.font='bold 52px Georgia';
+      ctx.fillStyle='rgba(0,0,0,0.65)';ctx.fillRect(0,0,W,H);
+      ctx.textAlign='center';ctx.font='bold 48px Georgia';
       ctx.fillStyle='#ffd700';ctx.shadowColor='#ff6600';ctx.shadowBlur=20;
-      const who=state.winner===0?'🎪 Speler 1 Wint!':(gameMode==='1p'?'🤖 Computer Wint!':'🎪 Speler 2 Wint!');
+      const who=state.winner===0?'🎪 Speler 1 Wint!':gameMode==='1p'?'🤖 Computer Wint!':'🎪 Speler 2 Wint!';
       ctx.fillText(who,W/2,H/2-20);
       ctx.font='20px Georgia';ctx.fillStyle='#ffcc88';ctx.shadowBlur=0;
       ctx.fillText('Tik of ENTER voor menu',W/2,H/2+30);
@@ -493,21 +469,45 @@
       }
     }
 
+    function drawMenu(){
+      drawBg();
+      ctx.save();
+      ctx.fillStyle='rgba(0,0,0,0.65)';ctx.roundRect(W/2-220,H/2-130,440,220,16);ctx.fill();
+      ctx.strokeStyle='#ffd700';ctx.lineWidth=2;ctx.roundRect(W/2-220,H/2-130,440,220,16);ctx.stroke();
+      ctx.textAlign='center';ctx.font='bold 30px Georgia';ctx.fillStyle='#ffd700';
+      ctx.shadowColor='#ff6600';ctx.shadowBlur=12;
+      ctx.fillText('Kies een modus',W/2,H/2-55);ctx.shadowBlur=0;
+      menuBtn(BTN.oneP,'🤖 1 Speler','#cc0000');
+      menuBtn(BTN.twoP,'👥 2 Spelers','#0044cc');
+      ctx.font='13px Georgia';ctx.fillStyle='#ffcc8888';
+      ctx.fillText('Tik of klik om te kiezen',W/2,H/2+90);
+      ctx.restore();
+    }
+
+    function menuBtn(b,label,color){
+      ctx.save();
+      ctx.fillStyle=color;ctx.shadowColor=color+'88';ctx.shadowBlur=10;
+      ctx.roundRect(b.x,b.y,b.w,b.h,10);ctx.fill();
+      ctx.strokeStyle='#ffd700';ctx.lineWidth=2;ctx.shadowBlur=0;
+      ctx.roundRect(b.x,b.y,b.w,b.h,10);ctx.stroke();
+      ctx.fillStyle='#fff';ctx.font='bold 17px Georgia';ctx.textAlign='center';
+      ctx.fillText(label,b.x+b.w/2,b.y+b.h/2+6);
+      ctx.restore();
+    }
+
     function loop(){
       updatePhysics();updateConfetti();
       if(gameMode==='menu'){drawMenu();}
       else{
-        drawBackground();
-        drawTouchIndicator(0);drawTouchIndicator(1);
-        drawNet();drawBall(state.ball);
+        drawBg();drawNet();drawBall();
         drawPlayer(state.players[0],0);drawPlayer(state.players[1],1);
-        if(gameMode==='1p')drawAIIndicator();
-        drawScore();drawConfetti();
-        if(state.winner!==null)drawWinScreen();
+        drawServeHint();drawScore();drawConfetti();
+        if(state.winner!==null)drawWin();
       }
       requestAnimationFrame(loop);
     }
 
+    resetGame();
     loop();
   </script>
 </body>
