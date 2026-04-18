@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎪 Circus Volleybal</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a0a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Georgia', serif;
+      overflow: hidden;
+    }
+    h1 {
+      color: #ffd700;
+      font-size: 2rem;
+      text-shadow: 0 0 20px #ff6600, 2px 2px 0 #cc0000;
+      margin-bottom: 10px;
+      letter-spacing: 3px;
+    }
+    #gameCanvas {
+      border: 4px solid #ffd700;
+      border-radius: 4px;
+      box-shadow: 0 0 40px #ff6600aa;
+      display: block;
+    }
+    #controls {
+      color: #ffcc88;
+      font-size: 0.8rem;
+      margin-top: 10px;
+      text-align: center;
+      opacity: 0.8;
+    }
+    #controls span { color: #ffd700; }
+  </style>
+</head>
+<body>
+  <h1>🎪 CIRCUS VOLLEYBAL 🎪</h1>
+  <canvas id="gameCanvas" width="800" height="450"></canvas>
+  <div id="controls">
+    <span>Speler 1:</span> A/D bewegen · W springen &nbsp;|&nbsp;
+    <span>Speler 2:</span> ←/→ bewegen · ↑ springen &nbsp;|&nbsp;
+    <span>ENTER</span> nieuw spel
+  </div>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const W = canvas.width;
+    const H = canvas.height;
+    const GROUND = H - 60;
+    const NET_X = W / 2;
+    const NET_H = 110;
+    const NET_TOP = GROUND - NET_H;
+    const GRAVITY = 0.45;
+    const PLAYER_SPEED = 4.5;
+    const JUMP_FORCE = -11;
+    const BALL_RADIUS = 18;
+    const PLAYER_R = 28;
+    const WIN_SCORE = 7;
+
+    let confetti = [];
+
+    function spawnConfetti() {
+      for (let i = 0; i < 120; i++) {
+        confetti.push({
+          x: Math.random() * W,
+          y: Math.random() * -H,
+          vx: (Math.random() - 0.5) * 3,
+          vy: Math.random() * 3 + 1,
+          color: ['#ff0','#f0f','#0ff','#f60','#0f0','#fff'][Math.floor(Math.random()*6)],
+          size: Math.random() * 8 + 4,
+          rot: Math.random() * Math.PI * 2,
+          rotV: (Math.random() - 0.5) * 0.2,
+        });
+      }
+    }
+
+    function resetGame() {
+      state.score = [0, 0];
+      state.winner = null;
+      confetti = [];
+      resetRound(0);
+    }
+
+    function resetRound(lastScorer) {
+      state.ball = {
+        x: lastScorer === 0 ? W * 0.25 : W * 0.75,
+        y: GROUND - 200,
+        vx: lastScorer === 0 ? 3 : -3,
+        vy: -4,
+        spin: 0,
+        angle: 0,
+      };
+      state.players[0] = { x: W * 0.2, y: GROUND, vy: 0, onGround: true, face: 1 };
+      state.players[1] = { x: W * 0.8, y: GROUND, vy: 0, onGround: true, face: -1 };
+    }
+
+    const keys = {};
+    document.addEventListener('keydown', e => {
+      keys[e.key] = true;
+      if (e.key === 'Enter' && state.winner) resetGame();
+      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+    });
+    document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+    const state = {
+      score: [0, 0],
+      winner: null,
+      ball: null,
+      players: [{}, {}],
+    };
+    resetGame();
+
+    function drawBackground() {
+      ctx.fillStyle = '#1a0a2e';
+      ctx.fillRect(0, 0, W, H);
+
+      const stripeW = 50;
+      const colors = ['#cc0000', '#ffffff', '#ffd700'];
+      for (let i = 0; i < Math.ceil(W / stripeW); i++) {
+        ctx.fillStyle = colors[i % colors.length];
+        ctx.fillRect(i * stripeW, 0, stripeW, 30);
+      }
+      ctx.fillStyle = '#8B0000';
+      ctx.fillRect(0, 28, W, 4);
+
+      const grd = ctx.createLinearGradient(0, GROUND - 10, 0, H);
+      grd.addColorStop(0, '#8B4513');
+      grd.addColorStop(1, '#5C2D0A');
+      ctx.fillStyle = grd;
+      ctx.fillRect(0, GROUND, W, H - GROUND);
+
+      ctx.strokeStyle = '#a0522d44';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < 8; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND + i * 8);
+        ctx.lineTo(W, GROUND + i * 8);
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = '#ffffff88';
+      for (let i = 0; i < 30; i++) {
+        const sx = (i * 137 + 50) % (W - 20) + 10;
+        const sy = (i * 97 + 40) % (GROUND - 40) + 10;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      drawSpotlight(W * 0.25, '#ffffff22');
+      drawSpotlight(W * 0.75, '#ffaa0022');
+    }
+
+    function drawSpotlight(cx, color) {
+      const grd = ctx.createRadialGradient(cx, 30, 10, cx, GROUND, 200);
+      grd.addColorStop(0, color);
+      grd.addColorStop(1, 'transparent');
+      ctx.fillStyle = grd;
+      ctx.fillRect(cx - 200, 0, 400, GROUND);
+    }
+
+    function drawNet() {
+      ctx.fillStyle = '#ffd700';
+      ctx.fillRect(NET_X - 5, NET_TOP - 10, 10, NET_H + 10);
+
+      ctx.strokeStyle = '#ffffffcc';
+      ctx.lineWidth = 1.5;
+      const cols = 8, rows = 6, nw = 60, nh = NET_H;
+      for (let c = 0; c <= cols; c++) {
+        ctx.beginPath();
+        ctx.moveTo(NET_X - nw/2 + c * (nw/cols), NET_TOP);
+        ctx.lineTo(NET_X - nw/2 + c * (nw/cols), NET_TOP + nh);
+        ctx.stroke();
+      }
+      for (let r = 0; r <= rows; r++) {
+        ctx.beginPath();
+        ctx.moveTo(NET_X - nw/2, NET_TOP + r * (nh/rows));
+        ctx.lineTo(NET_X + nw/2, NET_TOP + r * (nh/rows));
+        ctx.stroke();
+      }
+      ctx.fillStyle = '#cc0000';
+      ctx.fillRect(NET_X - nw/2, NET_TOP - 4, nw, 8);
+    }
+
+    function drawBall(ball) {
+      ctx.save();
+      ctx.translate(ball.x, ball.y);
+      ctx.rotate(ball.angle);
+
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.ellipse(0, GROUND - ball.y + 4, BALL_RADIUS * 0.8, 6, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(0, 0, BALL_RADIUS, 0, Math.PI * 2);
+      const bGrd = ctx.createRadialGradient(-5, -5, 2, 0, 0, BALL_RADIUS);
+      bGrd.addColorStop(0, '#ffee88');
+      bGrd.addColorStop(0.5, '#ff6600');
+      bGrd.addColorStop(1, '#cc2200');
+      ctx.fillStyle = bGrd;
+      ctx.fill();
+
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-BALL_RADIUS, 0);
+      ctx.lineTo(BALL_RADIUS, 0);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(0, -BALL_RADIUS);
+      ctx.lineTo(0, BALL_RADIUS);
+      ctx.stroke();
+
+      drawStar(ctx, 0, 0, 5, 6, 3, '#ffd700');
+      ctx.restore();
+    }
+
+    function drawStar(ctx, cx, cy, spikes, outerR, innerR, color) {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      let rot = (Math.PI / 2) * 3;
+      const step = Math.PI / spikes;
+      ctx.moveTo(cx, cy - outerR);
+      for (let i = 0; i < spikes; i++) {
+        ctx.lineTo(cx + Math.cos(rot) * outerR, cy + Math.sin(rot) * outerR);
+        rot += step;
+        ctx.lineTo(cx + Math.cos(rot) * innerR, cy + Math.sin(rot) * innerR);
+        rot += step;
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawPlayer(p, idx) {
+      const colors = [
+        { body: '#cc0000', hat: '#8B0000', detail: '#ffd700' },
+        { body: '#0044cc', hat: '#002288', detail: '#ff6600' },
+      ];
+      const c = colors[idx];
+      const dir = p.face;
+
+      ctx.save();
+      ctx.translate(p.x, p.y);
+
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(0, 2, PLAYER_R * 0.8, 7, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = c.body;
+      ctx.beginPath();
+      ctx.ellipse(0, -PLAYER_R * 0.5, PLAYER_R * 0.7, PLAYER_R * 0.8, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = c.detail;
+      for (let i = -1; i <= 1; i++) {
+        ctx.beginPath();
+        ctx.arc(i * 12, -PLAYER_R * 0.4, 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = '#f5c9a0';
+      ctx.beginPath();
+      ctx.arc(0, -PLAYER_R * 1.45, PLAYER_R * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ff2222';
+      ctx.beginPath();
+      ctx.arc(dir * 5, -PLAYER_R * 1.4, 6, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.arc(dir * 8 - dir * 14, -PLAYER_R * 1.55, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.arc(dir * 8, -PLAYER_R * 1.55, 3, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#fff';
+      ctx.beginPath();
+      ctx.arc(dir * 8 - dir * 14 + 1, -PLAYER_R * 1.58, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.arc(dir * 8 + 1, -PLAYER_R * 1.58, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = c.hat;
+      ctx.fillRect(-14, -PLAYER_R * 2.15, 28, 22);
+      ctx.fillRect(-18, -PLAYER_R * 1.95, 36, 6);
+      ctx.fillStyle = c.detail;
+      ctx.fillRect(-14, -PLAYER_R * 2.0, 28, 5);
+
+      ctx.strokeStyle = c.body;
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(dir * 18, -PLAYER_R * 0.6);
+      ctx.lineTo(dir * 30, -PLAYER_R * 1.2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-dir * 18, -PLAYER_R * 0.6);
+      ctx.lineTo(-dir * 28, -PLAYER_R * 0.1);
+      ctx.stroke();
+
+      ctx.strokeStyle = c.body;
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.moveTo(-10, 0);
+      ctx.lineTo(-14, 20);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(10, 0);
+      ctx.lineTo(14, 20);
+      ctx.stroke();
+
+      ctx.fillStyle = '#222';
+      ctx.beginPath();
+      ctx.ellipse(-14, 22, 16, 7, -0.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(14, 22, 16, 7, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.restore();
+    }
+
+    function drawScore() {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.roundRect(W/2 - 100, 35, 200, 50, 10);
+      ctx.fill();
+      ctx.strokeStyle = '#ffd700';
+      ctx.lineWidth = 2;
+      ctx.roundRect(W/2 - 100, 35, 200, 50, 10);
+      ctx.stroke();
+
+      ctx.font = 'bold 28px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#cc0000';
+      ctx.fillText(state.score[0], W/2 - 40, 68);
+      ctx.fillStyle = '#aaa';
+      ctx.fillText('-', W/2, 68);
+      ctx.fillStyle = '#0044cc';
+      ctx.fillText(state.score[1], W/2 + 40, 68);
+
+      ctx.font = '12px Georgia';
+      ctx.fillStyle = '#ffcc88';
+      ctx.fillText('P1', W/2 - 40, 42);
+      ctx.fillText('P2', W/2 + 40, 42);
+      ctx.restore();
+    }
+
+    function drawWinScreen() {
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 52px Georgia';
+      ctx.fillStyle = '#ffd700';
+      ctx.shadowColor = '#ff6600';
+      ctx.shadowBlur = 20;
+      const wText = state.winner === 0 ? '🎪 Speler 1 Wint! 🎪' : '🎪 Speler 2 Wint! 🎪';
+      ctx.fillText(wText, W/2, H/2 - 20);
+      ctx.font = '22px Georgia';
+      ctx.fillStyle = '#ffcc88';
+      ctx.shadowBlur = 0;
+      ctx.fillText('Druk ENTER voor nieuw spel', W/2, H/2 + 30);
+      ctx.restore();
+    }
+
+    function drawConfetti() {
+      for (const p of confetti) {
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.rot);
+        ctx.fillStyle = p.color;
+        ctx.fillRect(-p.size/2, -p.size/4, p.size, p.size/2);
+        ctx.restore();
+      }
+    }
+
+    function updateConfetti() {
+      for (const p of confetti) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.rot += p.rotV;
+        if (p.y > H + 20) p.y = -10;
+      }
+    }
+
+    function updatePhysics() {
+      if (state.winner) return;
+
+      const b = state.ball;
+      const p0 = state.players[0];
+      const p1 = state.players[1];
+
+      function movePlayer(p, left, right, jump) {
+        if (keys[left])  { p.x -= PLAYER_SPEED; p.face = -1; }
+        if (keys[right]) { p.x += PLAYER_SPEED; p.face = 1; }
+        if (keys[jump] && p.onGround) { p.vy = JUMP_FORCE; p.onGround = false; }
+        p.vy += GRAVITY;
+        p.y += p.vy;
+        if (p.y >= GROUND) { p.y = GROUND; p.vy = 0; p.onGround = true; }
+      }
+
+      movePlayer(p0, 'a', 'd', 'w');
+      movePlayer(p1, 'ArrowLeft', 'ArrowRight', 'ArrowUp');
+
+      p0.x = Math.max(PLAYER_R, Math.min(NET_X - 40, p0.x));
+      p1.x = Math.max(NET_X + 40, Math.min(W - PLAYER_R, p1.x));
+
+      b.vy += GRAVITY * 0.85;
+      b.x += b.vx;
+      b.y += b.vy;
+      b.angle += b.vx * 0.05;
+
+      if (b.x - BALL_RADIUS < 0) { b.x = BALL_RADIUS; b.vx = Math.abs(b.vx) * 0.8; }
+      if (b.x + BALL_RADIUS > W) { b.x = W - BALL_RADIUS; b.vx = -Math.abs(b.vx) * 0.8; }
+
+      if (b.y + BALL_RADIUS > NET_TOP && b.y - BALL_RADIUS < GROUND) {
+        const left  = NET_X - 30;
+        const right = NET_X + 30;
+        if (b.x + BALL_RADIUS > left && b.x - BALL_RADIUS < right) {
+          if (b.x < NET_X) { b.x = left - BALL_RADIUS; b.vx = -Math.abs(b.vx); }
+          else             { b.x = right + BALL_RADIUS; b.vx =  Math.abs(b.vx); }
+        }
+      }
+
+      if (b.y - BALL_RADIUS < 30) { b.y = 30 + BALL_RADIUS; b.vy = Math.abs(b.vy) * 0.7; }
+
+      if (b.y + BALL_RADIUS >= GROUND) {
+        const scorer = b.x < NET_X ? 1 : 0;
+        state.score[scorer]++;
+        if (state.score[scorer] >= WIN_SCORE) {
+          state.winner = scorer;
+          spawnConfetti();
+        } else {
+          resetRound(scorer);
+        }
+        return;
+      }
+
+      for (let i = 0; i < 2; i++) {
+        const p = state.players[i];
+        const px = p.x, py = p.y - PLAYER_R * 0.7;
+        const dx = b.x - px, dy = b.y - py;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const minDist = BALL_RADIUS + PLAYER_R * 0.9;
+        if (dist < minDist && dist > 0) {
+          const nx = dx / dist, ny = dy / dist;
+          b.x = px + nx * minDist;
+          b.y = py + ny * minDist;
+          const dot = b.vx * nx + b.vy * ny;
+          b.vx = (b.vx - 2 * dot * nx) * 0.9 + (i === 0 ? (keys['d'] ? 2 : 0) : (keys['ArrowLeft'] ? -2 : 0));
+          b.vy = (b.vy - 2 * dot * ny) * 0.9 - 3;
+          b.vx = Math.max(-14, Math.min(14, b.vx));
+          b.vy = Math.max(-14, Math.min(14, b.vy));
+          b.spin = b.vx * 0.3;
+        }
+      }
+    }
+
+    function loop() {
+      updatePhysics();
+      updateConfetti();
+      drawBackground();
+      drawNet();
+      drawBall(state.ball);
+      drawPlayer(state.players[0], 0);
+      drawPlayer(state.players[1], 1);
+      drawScore();
+      drawConfetti();
+      if (state.winner !== null) drawWinScreen();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
