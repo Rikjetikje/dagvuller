@@ -81,6 +81,7 @@
     const WIN_SCORE = 7;
 
     let gameMode = 'menu';
+    let confetti = [];
 
     const ai = {
       frameCounter: 0,
@@ -265,7 +266,6 @@
     }
 
     resetGame();
-    let confetti = [];
 
     function updatePhysics() {
       if (state.winner !== null || gameMode === 'menu') return;
