@@ -220,12 +220,12 @@
       if (state.phase !== 'playing') return;
 
       ai.frameCount++;
-      if (ai.frameCount < 5) return;
+      if (ai.frameCount < 3) return;
       ai.frameCount = 0;
 
       // Predict ball landing
       let bx=b.x, by=b.y, bvx=b.vx, bvy=b.vy;
-      for (let i=0; i<50; i++) {
+      for (let i=0; i<60; i++) {
         bvy += GRAVITY * 0.85; bx += bvx; by += bvy;
         if (bx < BALL_R)     { bx = BALL_R;     bvx =  Math.abs(bvx); }
         if (bx > W - BALL_R) { bx = W - BALL_R; bvx = -Math.abs(bvx); }
@@ -238,18 +238,19 @@
         }
       }
 
-      ai.targetX = (b.x > NET_X || b.vx > 0)
+      ai.targetX = (b.x > NET_X || b.vx > 1)
         ? Math.max(NET_X+40, Math.min(W-P_R, bx))
         : W * 0.75;
 
-      const dist = Math.hypot(b.x - p.x, b.y - (p.y - P_R));
-      ai.wantsJump = b.x > NET_X && b.vy > -2 && b.y > GROUND-260 && b.y < GROUND-20 && dist < 160;
+      // Jump when ball is falling on AI side and within reach
+      const dist = Math.hypot(b.x - p.x, b.y - (p.y - P_R * 1.5));
+      ai.wantsJump = b.x > NET_X && b.vy > 0 && b.y > NET_TOP && dist < 220;
     }
 
     function applyAI(p) {
       const dx = ai.targetX - p.x;
-      if (dx < -4) { p.x -= P_SPEED * 0.9; p.face = -1; }
-      else if (dx > 4) { p.x += P_SPEED * 0.9; p.face =  1; }
+      if (dx < -4) { p.x -= P_SPEED * 0.95; p.face = -1; }
+      else if (dx > 4) { p.x += P_SPEED * 0.95; p.face =  1; }
       if (ai.wantsJump && p.onGround) { p.vy = JUMP_V; p.onGround = false; ai.wantsJump = false; }
     }
 
